@@ -1,0 +1,24 @@
+{
+  "name": "البرنس - المتابعة السحابية",
+  "short_name": "بوابة البرنس",
+  "description": "بوابة المتابعة السحابية لمحلات البرنس لقطع غيار السيارات",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#2563eb",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192×192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512×512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

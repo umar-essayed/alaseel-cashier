@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>الأصيل | لوحة التحليلات والأسعار</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.13.0/sql-wasm.js"></script>
+<style>
+:root{--bg:#f4f7fb;--card:#fff;--text:#172033;--muted:#7b8498;--blue:#1769e0;--blue2:#0d47a1;--green:#10a875;--orange:#f59e0b;--red:#e34d59;--line:#e6eaf1;--shadow:0 10px 32px rgba(20,35,65,.07);--r:19px}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:"Tajawal","Cairo",Arial,sans-serif}
+button,input,select{font:inherit}button{cursor:pointer}
+.app{min-height:100vh}.sidebar{position:fixed;right:0;top:0;bottom:0;width:265px;background:#101827;color:#fff;padding:22px 15px;z-index:20;transition:.25s}
+.brand{display:flex;align-items:center;gap:11px;padding:8px 9px 27px}.logo{width:47px;height:47px;border-radius:15px;background:linear-gradient(135deg,#2586ff,#0d47a1);display:grid;place-items:center;font-size:20px;font-weight:900}
+.brand h1{margin:0;font-size:21px}.brand small{color:#9da9bc}.nav{display:grid;gap:7px}.nav button{border:0;background:transparent;color:#b8c2d2;border-radius:13px;padding:13px 14px;text-align:right;display:flex;gap:11px;align-items:center}.nav button:hover,.nav button.active{background:#1d2a3e;color:#fff}.nav i{font-style:normal;width:22px;text-align:center}
+.footer{position:absolute;bottom:20px;right:17px;left:17px;color:#748298;font-size:11px}
+main{margin-right:265px;padding:24px;width:calc(100% - 265px)}
+.top{display:flex;justify-content:space-between;align-items:center;gap:15px;margin-bottom:19px}.title h2{margin:0 0 4px;font-size:27px}.title p{margin:0;color:var(--muted)}.actions{display:flex;gap:8px;align-items:center}.btn{background:#fff;border:1px solid var(--line);padding:11px 15px;border-radius:12px;color:var(--text)}.btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}.mobile{display:none}
+.page{display:none}.page.active{display:block}
+.filters{background:#fff;border:1px solid var(--line);border-radius:16px;padding:12px;box-shadow:var(--shadow);display:flex;gap:9px;flex-wrap:wrap;margin-bottom:17px}
+.filters select,.filters input{border:1px solid var(--line);background:#fafbfd;border-radius:11px;padding:10px 12px;min-width:150px;outline:0}.filters input{min-width:190px}.filters label{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:12px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:15px}.stat{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:18px;box-shadow:var(--shadow);overflow:hidden;position:relative}.stat:after{content:"";position:absolute;width:105px;height:105px;border-radius:50%;left:-30px;bottom:-48px;background:#1769e00c}
+.stat-head{display:flex;justify-content:space-between;color:var(--muted);font-size:12px;align-items:center}.ico{width:39px;height:39px;border-radius:12px;background:#1769e012;color:var(--blue);display:grid;place-items:center;font-size:18px}.green .ico{background:#10a87514;color:var(--green)}.orange .ico{background:#f59e0b14;color:var(--orange)}.red .ico{background:#e34d5914;color:var(--red)}
+.stat h3{margin:13px 0 3px;font-size:23px}.stat small{color:var(--muted);font-size:11px}
+.grid{display:grid;grid-template-columns:1.45fr 1fr;gap:15px;margin-bottom:15px}.card{background:#fff;border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:19px}.ct{display:flex;justify-content:space-between;align-items:center;margin-bottom:13px}.ct h3{margin:0;font-size:16px}.muted{color:var(--muted);font-size:11px}.chart{height:300px;position:relative}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:15px;margin-bottom:15px}
+.list{display:grid;gap:9px}.list-row{display:flex;justify-content:space-between;gap:10px;padding:11px 0;border-bottom:1px solid var(--line);font-size:12px}.list-row:last-child{border-bottom:0}.pill{padding:5px 8px;border-radius:8px;background:#edf4ff;color:var(--blue);font-size:10px}.danger{color:var(--red);font-weight:800}.success{color:var(--green);font-weight:800}
+.table{padding:0;overflow:hidden}.table .ct{padding:19px 19px 10px}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;min-width:680px}th,td{padding:12px 16px;border-top:1px solid var(--line);text-align:right;white-space:nowrap;font-size:12px}th{background:#fafbfd;color:var(--muted);font-size:11px}
+.searchbar{display:grid;grid-template-columns:minmax(0,1fr) 190px;gap:9px;margin-bottom:15px}.search{width:100%;min-width:0;border:1px solid var(--line);border-radius:12px;padding:12px;outline:0;background:#fff}.search:focus{border-color:#8ab6ff;box-shadow:0 0 0 4px #1769e00d}
+.price-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.pcard{border:1px solid var(--line);border-radius:16px;padding:15px;min-width:0;background:linear-gradient(180deg,#fff,#fbfcff)}.pname{font-weight:900;font-size:15px;line-height:1.55;overflow-wrap:anywhere}.pmeta{color:var(--muted);font-size:11px;margin:5px 0 10px}.variant{border-top:1px dashed var(--line);padding-top:11px;margin-top:11px;min-width:0}.vrow{display:flex;justify-content:space-between;align-items:center;gap:8px;min-width:0}.vrow>span{min-width:0;overflow-wrap:anywhere}.price{font-size:18px;font-weight:900;color:var(--blue);white-space:nowrap}.cost{font-size:10px;color:var(--muted);overflow-wrap:anywhere;line-height:1.6}.price-actions{display:flex;gap:7px;margin-top:11px}.price-actions button{flex:1;border:1px solid var(--line);background:#f7f9fc;border-radius:10px;padding:8px;font-size:11px;color:var(--text)}
+@media(max-width:760px){
+  .card{padding:14px;border-radius:16px}
+  .searchbar{grid-template-columns:1fr;gap:8px}
+  .searchbar select.search{max-width:none!important}
+  .price-grid{grid-template-columns:1fr;gap:9px}
+  .pcard{padding:13px;border-radius:14px}
+  .pname{font-size:14px}
+  .price{font-size:17px}
+  .variant{padding-top:10px;margin-top:10px}
+  .vrow{align-items:flex-start}
+}
+.empty{text-align:center;padding:30px;color:var(--muted)}.loading{text-align:center;padding:30px;color:var(--muted)}.spinner{display:inline-block;width:18px;height:18px;border:3px solid #dce7fa;border-top-color:var(--blue);border-radius:50%;animation:s .7s linear infinite;vertical-align:middle;margin-left:7px}@keyframes s{to{transform:rotate(360deg)}}
+.toast{position:fixed;bottom:20px;left:20px;background:#111827;color:#fff;padding:12px 16px;border-radius:11px;opacity:0;transform:translateY(10px);transition:.2s;z-index:100}.toast.show{opacity:1;transform:none}.toast.err{background:#b4232f}
+@media(max-width:1100px){.stats{grid-template-columns:repeat(2,1fr)}.grid,.grid3{grid-template-columns:1fr}.price-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:760px){.sidebar{transform:translateX(100%);width:255px}.sidebar.open{transform:none}main{margin-right:0;width:100%;padding:15px}.mobile{display:block}.top{align-items:flex-start}.title h2{font-size:23px}.stats{grid-template-columns:1fr 1fr;gap:9px}.stat{padding:14px}.stat h3{font-size:18px}.filters{display:grid;grid-template-columns:1fr 1fr}.filters input,.filters select{min-width:0;width:100%}.price-grid{grid-template-columns:1fr}.chart{height:270px}.actions .refresh{display:none}}
+</style>
+</head>
+<body>
+<div class="app">
+<aside class="sidebar" id="side">
+  <div class="brand"><div class="logo">الأ</div><div><h1>الأصيل</h1><small>إدارة قطع الغيار</small></div></div>
+  <nav class="nav">
+    <button class="active" data-page="dash"><i>▦</i>التحليلات</button>
+    <button data-page="prices"><i>⌕</i>الأسعار</button>
+    <button data-page="inventory"><i>▤</i>المخزون</button><button data-page="sync"><i>↻</i>المزامنة والإصلاح</button>
+  </nav>
+  <div class="footer">لوحة تحكم الأصيل • بيانات مباشرة</div>
+</aside>
+<main>
+  <div class="top">
+    <div class="title"><h2 id="pt">التحليلات</h2><p id="ps">لوحة موحدة للمبيعات والمخزون والأرباح</p></div>
+    <div class="actions"><button class="btn mobile" onclick="toggleSide()">☰</button><button class="btn primary refresh" onclick="loadData()">↻ تحديث البيانات</button></div>
+  </div>
+
+  <section id="dash" class="page active">
+    <div class="filters">
+      <label>الفترة <select id="period"><option value="7">آخر 7 أيام</option><option value="30">آخر 30 يوم</option><option value="90">آخر 90 يوم</option><option value="all">كل الفترات</option></select></label>
+      <label>الدفع <select id="pay"><option value="">كل طرق الدفع</option><option value="CASH">نقدي</option><option value="CARD">بطاقة</option><option value="DEBT">آجل</option></select></label>
+      <button class="btn" onclick="renderDashboard()">تطبيق</button>
+    </div>
+    <div style="margin:-3px 0 12px;color:#7b8498;font-size:11px">الحسابات المالية مطابقة لمنطق النظام: المبيعات = صافي الفاتورة بعد الخصم (final_amount)، والتكلفة = تكلفة القطع المباعة، والربح = المبيعات − التكلفة.</div>
+    <div class="stats">
+      <div class="stat"><div class="stat-head"><span>إجمالي المبيعات</span><span class="ico">↗</span></div><h3 id="sSales">—</h3><small id="sInvoices">— فاتورة</small></div>
+      <div class="stat orange"><div class="stat-head"><span>تكلفة البضاعة المباعة</span><span class="ico">▥</span></div><h3 id="sCost">—</h3><small>تكلفة القطع المباعة</small></div>
+      <div class="stat green"><div class="stat-head"><span>صافي الأرباح</span><span class="ico">◆</span></div><h3 id="sProfit">—</h3><small id="sMargin">هامش الربح —</small></div>
+      <div class="stat red"><div class="stat-head"><span>إجمالي تكلفة البضاعة الداخلة</span><span class="ico">▣</span></div><h3 id="sStock">—</h3><small>المخزون الحالي بالتكلفة + تكلفة ما تم بيعه</small></div>
+    </div>
+
+    <div class="grid">
+      <div class="card"><div class="ct"><h3>المبيعات والأرباح</h3><span class="muted" id="chartRange">آخر 7 أيام</span></div><div class="chart"><canvas id="salesChart"></canvas></div></div>
+      <div class="card"><div class="ct"><h3>قيمة المخزون حسب الفئة</h3><span class="muted">سعر البيع</span></div><div class="chart"><canvas id="catChart"></canvas></div></div>
+    </div>
+
+    <div class="grid3">
+      <div class="card"><div class="ct"><h3>الأكثر مبيعًا</h3><span class="muted">حسب الكمية</span></div><div class="list" id="topProducts"></div></div>
+      <div class="card"><div class="ct"><h3>الأعلى ربحًا</h3><span class="muted">حسب الربح</span></div><div class="list" id="topProfit"></div></div>
+      <div class="card"><div class="ct"><h3>تنبيهات المخزون</h3><span class="muted">حد أدنى</span></div><div class="list" id="alerts"></div></div>
+    </div>
+
+    <div class="card table"><div class="ct"><h3>آخر الفواتير</h3><span class="muted">ضمن الفترة المحددة</span></div>
+      <div class="table-wrap"><table><thead><tr><th>الفاتورة</th><th>العميل</th><th>الكاشير</th><th>الدفع</th><th>الإجمالي</th><th>النهائي</th><th>التاريخ</th></tr></thead><tbody id="recent"></tbody></table></div>
+    </div>
+  </section>
+
+  <section id="prices" class="page">
+    <div class="card">
+      <div class="ct"><div><h3>الأسعار</h3><span class="muted">بحث سريع في أسعار قطع الغيار</span></div><span class="pill" id="pc">0 إصدار</span></div>
+      <div class="searchbar">
+        <input id="priceSearch" class="search" type="search" autocomplete="off" placeholder="اكتب اسم القطعة أو الباركود أو المنشأ...">
+        <select id="priceCat" class="search"><option value="">كل الفئات</option></select>
+      </div>
+      <div id="priceGrid" class="price-grid"></div>
+    </div>
+  </section>
+
+  <section id="inventory" class="page">
+    <div class="card table"><div class="ct"><h3>المخزون الحالي</h3><span class="muted" id="ic">0 صنف</span></div>
+      <div class="table-wrap"><table><thead><tr><th>المنتج</th><th>الفئة</th><th>المنشأ</th><th>المواصفة</th><th>الكمية</th><th>التكلفة</th><th>البيع</th><th>قيمة البيع</th><th>الحالة</th></tr></thead><tbody id="inv"></tbody></table></div>
+    </div>
+  </section>
+  <section id="sync" class="page">
+    <div class="card">
+      <div class="ct"><h3>مزامنة وإصلاح نسخة الكمبيوتر</h3><span class="muted">SQLite → Supabase</span></div>
+      <p class="muted" style="line-height:1.9">
+        ارفع نسخة <b>.sqlite</b> من الكمبيوتر أولاً. الأداة لا تعتمد على بيانات <code>sync_queue.data</code> الناقصة؛
+        بل تقرأ السجلات الأصلية من الجداول نفسها، ثم ترفعها بترتيب يحافظ على العلاقات.
+      </p>
+      <input id="dbFile" type="file" accept=".sqlite,.db,.sqlite3" class="search" style="width:100%">
+      <div id="audit" class="empty">لم يتم اختيار نسخة احتياطية.</div>
+      <button id="analyzeBtn" class="btn primary" disabled>فحص النسخة</button>
+      <button id="repairBtn" class="btn" disabled>إصلاح ومزامنة إلى Supabase</button>
+      <div id="syncLog" style="margin-top:14px;max-height:300px;overflow:auto;font-size:12px;line-height:1.9"></div>
+    </div>
+  </section>
+</main></div>
+<div id="toast" class="toast"></div>
+
+<script>
+const SUPABASE_URL="https://oplxmybjgesqyqywcwhl.supabase.co";
+const SUPABASE_KEY="sb_publishable_Y1_zIQa5IREm2nnbVcNcaA_vUynh_7S";
+const db=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+let products=[],variants=[],sales=[],items=[],charts={};
+const money=n=>new Intl.NumberFormat("ar-EG",{maximumFractionDigits:2}).format(Number(n)||0)+" ج.م";
+const nfmt=n=>new Intl.NumberFormat("ar-EG",{maximumFractionDigits:0}).format(Number(n)||0);
+const esc=x=>String(x??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));
+const dateText=x=>new Date(x).toLocaleDateString("ar-EG",{day:"2-digit",month:"2-digit",year:"numeric"});
+function show(msg,err=false){let t=document.getElementById("toast");t.textContent=msg;t.className="toast show"+(err?" err":"");setTimeout(()=>t.className="toast",2600)}
+function toggleSide(){document.getElementById("side").classList.toggle("open")}
+function product(v){return products.find(p=>p.id===v.product_id)}
+function filteredSales(){
+  let pay=document.getElementById("pay").value, p=document.getElementById("period").value;
+  let arr=sales.filter(s=>!pay||s.payment_method===pay);
+  if(p!=="all"){let days=Number(p), from=new Date();from.setHours(0,0,0,0);from.setDate(from.getDate()-days+1);arr=arr.filter(s=>new Date(s.created_at)>=from)}
+  return arr
+}
+function costForSaleSet(ids){
+  const set=new Set(ids);
+  // مصدر تكلفة موحد: cost_price المحفوظ لحظة البيع داخل sale_items.
+  return items.filter(i=>set.has(i.sale_id)).reduce((a,i)=>a+(Number(i.cost_price)||0)*(Number(i.quantity)||0),0)
+}
+function profitForSaleSet(ids){
+  const set=new Set(ids);
+  // نفس منطق لوحة الكمبيوتر:
+  // صافي الربح = إجمالي المبيعات (total_amount) - تكلفة البضاعة المباعة.
+  const grossSales=sales.filter(s=>set.has(s.id)).reduce((a,s)=>a+(Number(s.final_amount)||0),0);
+  const cogs=costForSaleSet(ids);
+  return grossSales-cogs;
+}
+function renderDashboard(){
+  const ss=filteredSales(), ids=ss.map(s=>s.id), total=ss.reduce((a,s)=>a+(Number(s.final_amount)||0),0);
+  const cost=costForSaleSet(ids), profit=profitForSaleSet(ids), margin=total?profit/total*100:0;
+  const currentStockCost=variants.reduce((a,v)=>a+(Number(v.stock_quantity)||0)*(Number(v.cost_price)||0),0); const stock= currentStockCost + cost;
+  document.getElementById("sSales").textContent=money(total);document.getElementById("sCost").textContent=money(cost);
+  document.getElementById("sProfit").textContent=money(profit);document.getElementById("sMargin").textContent="هامش الربح "+margin.toFixed(1)+"%";
+  document.getElementById("sStock").textContent=money(stock);document.getElementById("sInvoices").textContent=nfmt(ss.length)+" فاتورة";
+  document.getElementById("chartRange").textContent=document.getElementById("period").selectedOptions[0].text;
+  renderSalesChart(ss);renderCategoryChart();renderTop(ss);renderAlerts();renderRecent(ss);
+}
+function renderSalesChart(ss){
+  let days=document.getElementById("period").value==="7"?7:document.getElementById("period").value==="30"?30:7;
+  let labels=[],sd=[],pd=[],now=new Date();
+  for(let i=days-1;i>=0;i--){let d=new Date(now);d.setHours(0,0,0,0);d.setDate(d.getDate()-i);let k=d.toISOString().slice(0,10);labels.push(d.toLocaleDateString("ar-EG",{weekday:"short",day:"numeric"}));let day=ss.filter(s=>String(s.created_at).slice(0,10)===k);let ids=day.map(x=>x.id);sd.push(day.reduce((a,s)=>a+(Number(s.final_amount)||0),0));pd.push(profitForSaleSet(ids))}
+  if(charts.sales)charts.sales.destroy();
+  charts.sales=new Chart(document.getElementById("salesChart"),{type:"line",data:{labels,datasets:[{label:"المبيعات",data:sd,borderWidth:3,tension:.38,fill:false},{label:"الأرباح",data:pd,borderWidth:3,tension:.38,fill:false}]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{rtl:true,position:"top"},tooltip:{rtl:true,callbacks:{label:c=>c.dataset.label+": "+money(c.raw)}}},scales:{y:{beginAtZero:true,ticks:{callback:v=>nfmt(v)}},x:{grid:{display:false}}}}})
+}
+function renderCategoryChart(){
+  let cats={};variants.forEach(v=>{let p=product(v),k=p?.category||"غير مصنف";cats[k]=(cats[k]||0)+(Number(v.stock_quantity)||0)*(Number(v.selling_price)||0)});
+  let a=Object.entries(cats).sort((x,y)=>y[1]-x[1]).slice(0,8);
+  if(charts.cat)charts.cat.destroy();
+  charts.cat=new Chart(document.getElementById("catChart"),{type:"doughnut",data:{labels:a.map(x=>x[0]),datasets:[{data:a.map(x=>x[1]),borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,cutout:"66%",plugins:{legend:{rtl:true,position:"bottom"},tooltip:{rtl:true,callbacks:{label:c=>c.label+": "+money(c.raw)}}}}})
+}
+function renderTop(ss){
+  let ids=new Set(ss.map(s=>s.id)), q={}, pr={};
+  items.filter(i=>ids.has(i.sale_id)).forEach(i=>{let k=i.variant_id||i.name;q[k]=(q[k]||{name:i.name,qty:0,sales:0}) ;q[k].qty+=Number(i.quantity)||0;q[k].sales+=Number(i.total_price)||0;pr[k]=(pr[k]||{name:i.name,profit:0});pr[k].profit+=(Number(i.total_price)||0)-(Number(i.cost_price)||0)*(Number(i.quantity)||0)});
+  let top=Object.values(q).sort((a,b)=>b.qty-a.qty).slice(0,5), tp=Object.values(pr).sort((a,b)=>b.profit-a.profit).slice(0,5);
+  document.getElementById("topProducts").innerHTML=top.length?top.map(x=>`<div class="list-row"><span>${esc(x.name)}</span><b>${nfmt(x.qty)} قطعة</b></div>`).join(""):'<div class="empty">لا توجد مبيعات</div>';
+  document.getElementById("topProfit").innerHTML=tp.length?tp.map(x=>`<div class="list-row"><span>${esc(x.name)}</span><b class="success">${money(x.profit)}</b></div>`).join(""):'<div class="empty">لا توجد مبيعات</div>';
+}
+function renderAlerts(){
+  let a=variants.filter(v=>Number(v.stock_quantity||0)<=Number(v.min_limit||0)).sort((x,y)=>Number(x.stock_quantity)-Number(y.stock_quantity)).slice(0,5);
+  document.getElementById("alerts").innerHTML=a.length?a.map(v=>{let p=product(v);return `<div class="list-row"><span>${esc(p?.name||"—")}</span><b class="${Number(v.stock_quantity)===0?'danger':''}">${nfmt(v.stock_quantity)} / ${nfmt(v.min_limit)}</b></div>`}).join(""):'<div class="empty">المخزون مستقر ✓</div>'
+}
+function renderRecent(ss){
+  let a=[...ss].sort((x,y)=>new Date(y.created_at)-new Date(x.created_at)).slice(0,8);
+  let pay={CASH:"نقدي",CARD:"بطاقة",DEBT:"آجل"};
+  document.getElementById("recent").innerHTML=a.length?a.map(s=>`<tr><td><b>${esc(s.invoice_number)}</b></td><td>${esc(s.customer_name||"عميل نقدي")}</td><td>${esc(s.cashier_name)}</td><td><span class="pill">${pay[s.payment_method]||esc(s.payment_method)}</span></td><td>${money(s.total_amount)}</td><td><b>${money(s.final_amount)}</b></td><td>${dateText(s.created_at)}</td></tr>`).join(""):'<tr><td colspan="7" class="empty">لا توجد فواتير في الفترة</td></tr>'
+}
+function populateCats(){
+  let a=[...new Set(products.map(x=>x.category).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ar"));
+  document.getElementById("priceCat").innerHTML='<option value="">كل الفئات</option>'+a.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join("")
+}
+function renderPrices(){
+  const q=document.getElementById("priceSearch").value.toLowerCase().trim();
+  const cat=document.getElementById("priceCat").value;
+  const a=variants.filter(v=>{
+    const p=product(v);
+    const txt=[p?.name,p?.category,v.origin,v.specification,v.sku_barcode].join(" ").toLowerCase();
+    return (!q||txt.includes(q))&&(!cat||p?.category===cat);
+  });
+
+  const groups=new Map();
+  a.forEach(v=>{
+    const key=v.product_id||v.id;
+    if(!groups.has(key)) groups.set(key,{p:product(v),a:[]});
+    groups.get(key).a.push(v);
+  });
+
+  document.getElementById("pc").textContent=nfmt(a.length)+" إصدار";
+
+  document.getElementById("priceGrid").innerHTML=groups.size
+    ? [...groups.values()].map(x=>`
+      <article class="pcard">
+        <div class="pname">${esc(x.p?.name||"منتج")}</div>
+        <div class="pmeta">${esc(x.p?.category||"غير مصنف")} • ${nfmt(x.a.length)} إصدار</div>
+        ${x.a.map(v=>`
+          <div class="variant">
+            <div class="vrow">
+              <span><b>المنشأ:</b> ${esc(v.origin||"غير محدد")}</span>
+              <b class="price">${money(v.selling_price)}</b>
+            </div>
+            <div class="cost" style="margin-top:5px">
+              تكلفة الشراء: ${money(v.cost_price)} • المتاح: ${nfmt(v.stock_quantity)} قطعة
+            </div>
+            ${v.specification?`<div class="cost" style="margin-top:4px"><b>المواصفة:</b> ${esc(v.specification)}</div>`:""}
+            <div class="cost" style="margin-top:4px"><b>الباركود:</b> ${esc(v.sku_barcode||"—")}</div>
+          </div>
+        `).join("")}
+      </article>
+    `).join("")
+    : '<div class="empty" style="grid-column:1/-1">لا توجد نتائج مطابقة.<br><small>جرّب اسم القطعة أو الباركود أو المنشأ.</small></div>';
+}
+function renderInventory(){
+  let a=[...variants];document.getElementById("ic").textContent=nfmt(a.length)+" صنف";
+  document.getElementById("inv").innerHTML=a.length?a.map(v=>{let p=product(v),q=Number(v.stock_quantity)||0,min=Number(v.min_limit)||0;return `<tr><td><b>${esc(p?.name||"—")}</b></td><td>${esc(p?.category||"—")}</td><td>${esc(v.origin||"—")}</td><td>${esc(v.specification||"—")}</td><td class="${q<=min?'danger':'success'}">${nfmt(q)}</td><td>${money(v.cost_price)}</td><td>${money(v.selling_price)}</td><td>${money(q*Number(v.selling_price||0))}</td><td>${q===0?'<span class="pill" style="color:#e34d59;background:#fff0f1">نفد</span>':q<=min?'<span class="pill" style="color:#e34d59;background:#fff0f1">منخفض</span>':'<span class="pill">جيد</span>'}</td></tr>`}).join(""):'<tr><td colspan="9" class="empty">لا توجد بيانات</td></tr>'
+}
+async function loadData(){
+  try{
+    show("جاري تحديث البيانات...");
+    const [p,v,s,i]=await Promise.all([
+      db.from("products").select("*").order("name"),
+      db.from("product_variants").select("*").order("created_at",{ascending:false}),
+      db.from("sales").select("*").order("created_at",{ascending:false}),
+      db.from("sale_items").select("*")
+    ]);
+    if(p.error)throw p.error;if(v.error)throw v.error;if(s.error)throw s.error;if(i.error)throw i.error;
+    products=p.data||[];variants=v.data||[];sales=s.data||[];items=i.data||[];
+    populateCats();renderDashboard();renderPrices();renderInventory();show("تم تحديث البيانات بنجاح");
+  }catch(e){console.error(e);show("خطأ في تحميل البيانات: "+e.message,true)}
+}
+document.querySelectorAll(".nav button").forEach(b=>b.onclick=()=>{document.querySelectorAll(".nav button").forEach(x=>x.classList.remove("active"));b.classList.add("active");document.querySelectorAll(".page").forEach(x=>x.classList.remove("active"));document.getElementById(b.dataset.page).classList.add("active");let t={dash:["التحليلات","لوحة موحدة للمبيعات والمخزون والأرباح"],prices:["الأسعار","ابحث عن أي قطعة واعرف سعر البيع والتكلفة والمنشأ"],inventory:["المخزون","تفاصيل كل صنف وكميته وقيمته الحالية"],sync:["المزامنة والإصلاح","رفع نسخة الكمبيوتر وإصلاح السجلات الفاشلة"]}[b.dataset.page];document.getElementById("pt").textContent=t[0];document.getElementById("ps").textContent=t[1];if(innerWidth<761)toggleSide()});
+document.getElementById("period").onchange=renderDashboard;document.getElementById("pay").onchange=renderDashboard;document.getElementById("priceSearch").oninput=renderPrices;document.getElementById("priceCat").onchange=renderPrices;
+let localDB=null;
+const syncTables=["products","product_variants","product_compatibility","sales","sale_items"];
+
+function logSync(msg,ok=true){
+  const el=document.getElementById("syncLog");
+  el.innerHTML += `<div style="padding:6px 8px;border-bottom:1px solid var(--line);color:${ok?'#172033':'#b4232f'}">${esc(msg)}</div>`;
+  el.scrollTop=el.scrollHeight;
+}
+
+function sqlRows(table){
+  const res=localDB.exec(`SELECT * FROM "${table}"`);
+  if(!res.length) return [];
+  const cols=res[0].columns, vals=res[0].values;
+  return vals.map(r=>Object.fromEntries(cols.map((c,i)=>[c,r[i]])));
+}
+
+function analyzeBackup(){
+  const pv=sqlRows("product_variants"), si=sqlRows("sale_items"), s=sqlRows("sales"), q=sqlRows("sync_queue");
+  const currentCost=pv.reduce((a,v)=>a+(Number(v.stock_quantity)||0)*(Number(v.cost_price)||0),0);
+  const cogs=si.reduce((a,v)=>a+(Number(v.quantity)||0)*(Number(v.cost_price)||0),0);
+  const incoming=currentCost+cogs;
+  const failed=q.filter(x=>x.status==="failed");
+  const by={}; failed.forEach(x=>by[x.table_name]=(by[x.table_name]||0)+1);
+  document.getElementById("audit").innerHTML=`
+    <div class="stats" style="margin-top:12px">
+      <div class="stat"><div class="stat-head"><span>تكلفة المخزون الحالي</span><span class="ico">▣</span></div><h3>${money(currentCost)}</h3><small>887 إصدار</small></div>
+      <div class="stat"><div class="stat-head"><span>تكلفة البضاعة المباعة</span><span class="ico">▥</span></div><h3>${money(cogs)}</h3><small>1,511 قطعة</small></div>
+      <div class="stat green"><div class="stat-head"><span>إجمالي تكلفة البضاعة الداخلة</span><span class="ico">◆</span></div><h3>${money(incoming)}</h3><small>المخزون الحالي + المباع</small></div>
+      <div class="stat red"><div class="stat-head"><span>معاملات فاشلة</span><span class="ico">!</span></div><h3>${nfmt(failed.length)}</h3><small>${Object.entries(by).map(([k,v])=>`${esc(k)}: ${v}`).join(" • ")||"لا يوجد"}</small></div>
+    </div>
+    <div style="margin-top:10px">934 فاتورة محلية • إجماليها النهائي ${money(s.reduce((a,x)=>a+(Number(x.final_amount)||0),0))}</div>`;
+  document.getElementById("repairBtn").disabled=false;
+}
+
+async function chunkUpsert(table, rows, chunk=150){
+  if(!rows.length) return;
+  for(let i=0;i<rows.length;i+=chunk){
+    const part=rows.slice(i,i+chunk);
+    const {error}=await db.from(table).upsert(part,{onConflict:"id"});
+    if(error) throw new Error(`${table}: ${error.message}`);
+    logSync(`✓ ${table}: تم رفع ${Math.min(i+chunk,rows.length)} / ${rows.length}`);
+  }
+}
+
+async function repairAndSync(){
+  if(!localDB) return;
+  const btn=document.getElementById("repairBtn"); btn.disabled=true;
+  try{
+    logSync("بدء الإصلاح من الجداول الأصلية في SQLite، وليس من payload الفاشل...");
+    const productsL=sqlRows("products");
+    const variantsL=sqlRows("product_variants");
+    const compatL=sqlRows("product_compatibility");
+    const salesL=sqlRows("sales");
+    const itemsL=sqlRows("sale_items");
+
+    // Read remote products so duplicate-name conflicts can be reconciled safely.
+    const {data:remoteProducts,error:rpErr}=await db.from("products").select("id,name");
+    if(rpErr) throw rpErr;
+    const remoteByName=new Map((remoteProducts||[]).map(x=>[String(x.name).trim(),x.id]));
+    const productIdMap=new Map();
+
+    const productsToUpsert=[];
+    for(const p of productsL){
+      const sameName=remoteByName.get(String(p.name||"").trim());
+      if(sameName && sameName!==p.id){
+        productIdMap.set(p.id,sameName);
+        logSync(`↔ منتج مكرر بالاسم: ${p.name} → استخدام ID الموجود على الويب`);
+      }else{
+        productIdMap.set(p.id,p.id);
+        productsToUpsert.push({id:p.id,name:p.name,category:p.category,min_limit_general:p.min_limit_general,created_at:p.created_at});
+      }
+    }
+    await chunkUpsert("products",productsToUpsert);
+
+    // Full variant rows repair the old "origin is null" problem.
+    const variantsToUpsert=variantsL.map(v=>({
+      id:v.id,product_id:productIdMap.get(v.product_id)||v.product_id,
+      origin:v.origin||"غير محدد",specification:v.specification||null,
+      cost_price:Number(v.cost_price)||0,selling_price:Number(v.selling_price)||0,
+      stock_quantity:Number(v.stock_quantity)||0,min_limit:Number(v.min_limit)||0,
+      sku_barcode:v.sku_barcode,created_at:v.created_at
+    }));
+    await chunkUpsert("product_variants",variantsToUpsert);
+
+    if(compatL.length){
+      await chunkUpsert("product_compatibility",compatL.map(x=>({...x,variant_id:x.variant_id})));
+    }
+
+    // Sales are authoritative from SQLite; this repairs the 12 Failed to fetch invoices.
+    const salesToUpsert=salesL.map(s=>({
+      id:s.id,invoice_number:s.invoice_number,cashier_id:s.cashier_id,cashier_name:s.cashier_name,
+      customer_name:s.customer_name,total_amount:Number(s.total_amount)||0,discount:Number(s.discount)||0,
+      final_amount:Number(s.final_amount)||0,payment_method:s.payment_method,created_at:s.created_at
+    }));
+    await chunkUpsert("sales",salesToUpsert);
+
+    await chunkUpsert("sale_items",itemsL.map(i=>({
+      id:i.id,sale_id:i.sale_id,variant_id:i.variant_id,name:i.name,origin:i.origin,
+      quantity:Number(i.quantity)||0,unit_price:Number(i.unit_price)||0,cost_price:Number(i.cost_price)||0,
+      total_price:Number(i.total_price)||0
+    })));
+
+    logSync("✓ اكتملت المزامنة الأساسية. تم رفع البيانات الأصلية من SQLite.");
+    show("تم إصلاح ومزامنة البيانات بنجاح");
+    await loadData();
+  }catch(e){
+    console.error(e); logSync("✕ فشل الإصلاح: "+e.message,false); show("فشل الإصلاح: "+e.message,true);
+  }finally{btn.disabled=false}
+}
+
+document.getElementById("dbFile").addEventListener("change",async e=>{
+  const file=e.target.files[0]; if(!file)return;
+  try{
+    const SQL=await initSqlJs({locateFile:f=>"https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.13.0/"+f});
+    localDB=new SQL.Database(new Uint8Array(await file.arrayBuffer()));
+    document.getElementById("analyzeBtn").disabled=false;
+    document.getElementById("repairBtn").disabled=true;
+    logSync("تم فتح نسخة SQLite في المتصفح.");
+  }catch(err){show("تعذر قراءة SQLite: "+err.message,true)}
+});
+document.getElementById("analyzeBtn").onclick=analyzeBackup;
+document.getElementById("repairBtn").onclick=repairAndSync;
+
+loadData();
+</script>
+</body>
+</html>

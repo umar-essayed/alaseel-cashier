@@ -1,0 +1,100 @@
+{
+  "name": "auto-parts-cashier",
+  "version": "1.0.0",
+  "description": "نظام الكاشير والمخزون لقطع غيار السيارات - محلات البرنس",
+  "main": "electron/main.js",
+  "author": {
+    "name": "محلات البرنس",
+    "email": "info@elprince.com"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "electron:dev": "electron .",
+    "start": "vite & electron .",
+    "electron:build": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win --x64"
+  },
+  "build": {
+    "appId": "com.alaseel.auto-parts-cashier",
+    "productName": "الأصيل - نظام الكاشير",
+    "copyright": "محلات الأصيل لقطع الغيار",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "logo.png",
+      "logo-without-bg.png",
+      "package.json",
+      "node_modules/**/*",
+      "print_server.py",
+      "bin/**/*",
+      "python/**/*"
+    ],
+    "asarUnpack": [
+      "**/node_modules/better-sqlite3/**/*",
+      "**/node_modules/bindings/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "logo.png",
+        "to": "logo.png"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "zip",
+          "arch": ["x64"]
+        },
+        {
+          "target": "dir",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false,
+      "sign": null
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "الأصيل - الكاشير",
+      "artifactName": "${productName} Setup ${version}.${ext}",
+      "deleteAppDataOnUninstall": false
+    },
+    "portable": {
+      "artifactName": "${productName} Portable ${version}.${ext}"
+    }
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.110.0",
+    "better-sqlite3": "^11.3.0",
+    "electron-pos-printer": "^1.2.6",
+    "lucide-react": "^0.344.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.1.0",
+    "@types/better-sqlite3": "^7.6.9",
+    "@types/react": "^18.2.64",
+    "@types/react-dom": "^18.2.21",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.18",
+    "electron": "^29.1.0",
+    "electron-builder": "^25.1.8",
+    "postcss": "^8.4.35",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5.3.3",
+    "vite": "^5.1.4"
+  }
+}
