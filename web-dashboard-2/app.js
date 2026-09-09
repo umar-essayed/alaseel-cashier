@@ -3,8 +3,8 @@
 // ==================================================================================
 
 // Default Fallback Credentials
-const DEFAULT_URL = "https://oplxmybjgesqyqywcwhl.supabase.co";
-const DEFAULT_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9wbHhteWJqZ2VzcXlxeXdjd2hsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzExMTE2NCwiZXhwIjoyMDk4Njg3MTY0fQ.wf1SILUM3EDMvhC2DV9a7i73-ok7vMUIZqo479dPgho";
+const DEFAULT_URL = "https://yxbazuscpyyfzerhflau.supabase.co";
+const DEFAULT_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl4YmF6dXNjcHl5ZnplcmhmbGF1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzUyMDI3NiwiZXhwIjoyMDk5MDk2Mjc2fQ.H8IbRO5dOAxQuH3qtz-4toYgGeNsbbz-_pUO781cYNE";
 
 // *** Renamed from 'supabase' to 'sbClient' to avoid conflict with window.supabase CDN global ***
 let sbClient = null;
@@ -32,8 +32,8 @@ window.addEventListener('DOMContentLoaded', () => {
   // Theme check
   updateThemeIcon();
 
-  const sUrl = localStorage.getItem('supabase_url') || DEFAULT_URL;
-  const sKey = localStorage.getItem('supabase_anon_key') || DEFAULT_KEY;
+  const sUrl = localStorage.getItem('supabase_url_2') || DEFAULT_URL;
+  const sKey = localStorage.getItem('supabase_anon_key_2') || DEFAULT_KEY;
 
   const urlInput = document.getElementById('setup-url');
   const keyInput = document.getElementById('setup-key');
@@ -43,8 +43,8 @@ window.addEventListener('DOMContentLoaded', () => {
   if (sUrl && sKey) {
     try {
       sbClient = window.supabase.createClient(sUrl, sKey);
-      localStorage.setItem('supabase_url', sUrl);
-      localStorage.setItem('supabase_anon_key', sKey);
+      localStorage.setItem('supabase_url_2', sUrl);
+      localStorage.setItem('supabase_anon_key_2', sKey);
       checkSession();
     } catch (err) {
       console.error("Initialization error:", err);
@@ -116,8 +116,8 @@ function handleSetupSubmit(e) {
   const url = document.getElementById('setup-url').value.trim();
   const key = document.getElementById('setup-key').value.trim();
   if (url && key) {
-    localStorage.setItem('supabase_url', url);
-    localStorage.setItem('supabase_anon_key', key);
+    localStorage.setItem('supabase_url_2', url);
+    localStorage.setItem('supabase_anon_key_2', key);
     window.location.reload();
   }
 }
@@ -127,7 +127,7 @@ function handleSetupSubmit(e) {
 // ==================================================================================
 function checkSession() {
   document.getElementById('setup-screen').classList.add('hidden');
-  const sessionRaw = localStorage.getItem('admin_session');
+  const sessionRaw = localStorage.getItem('admin_session_2');
   if (sessionRaw) {
     try {
       const session = JSON.parse(sessionRaw);
@@ -136,7 +136,7 @@ function checkSession() {
         return;
       }
     } catch (e) {
-      localStorage.removeItem('admin_session');
+      localStorage.removeItem('admin_session_2');
     }
   }
   showLoginScreen();
@@ -192,7 +192,7 @@ async function handleLoginSubmit(e) {
 
     if (isAuthenticated) {
       const session = { loggedIn: true, username: userField, loginTime: new Date().toISOString() };
-      localStorage.setItem('admin_session', JSON.stringify(session));
+      localStorage.setItem('admin_session_2', JSON.stringify(session));
       showMainApp(userField);
     } else {
       if (errText) errText.textContent = 'اسم المستخدم أو كلمة المرور غير صحيحة، أو الحساب لا يملك صلاحية ADMIN سحابياً.';
@@ -208,7 +208,7 @@ async function handleLoginSubmit(e) {
 }
 
 function handleLogout() {
-  localStorage.removeItem('admin_session');
+  localStorage.removeItem('admin_session_2');
   showLoginScreen();
 }
 

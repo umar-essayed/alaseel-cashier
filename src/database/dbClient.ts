@@ -293,255 +293,6 @@ export const dbClient = {
     }
   },
 
-  // Delete product variant
-  async deleteVariant(variantId: string, userId: string, username: string): Promise<{ success: boolean }> {
-    if (isElectron) {
-      return await window.api.deleteVariant(variantId, userId, username);
-    } else {
-      const variants = getLocalStorageData<ProductVariant[]>('variants', []);
-      const matched = variants.find(v => v.id === variantId);
-      if (!matched) throw new Error('Variant not found');
-      
-      const newVariants = variants.filter(v => v.id !== variantId);
-      setLocalStorageData('variants', newVariants);
-
-      // Check if product has other variants
-      const productVariantsCount = newVariants.filter(v => v.product_id === matched.product_id).length;
-      if (productVariantsCount === 0) {
-        const products = getLocalStorageData<any[]>('products', []);
-        setLocalStorageData('products', products.filter(p => p.id !== matched.product_id));
-        
-        // Sync queue for product delete
-        const queue = getLocalStorageData<any[]>('syncQueue', []);
-        queue.push({
-          id: 'sync_' + Math.random().toString(36).substr(2, 9),
-          table_name: 'products_delete',
-          operation: 'DELETE',
-          record_id: matched.product_id,
-          data: JSON.stringify({ id: matched.product_id }),
-          status: 'pending',
-          created_at: new Date().toISOString()
-        });
-        setLocalStorageData('syncQueue', queue);
-      }
-
-      // Sync queue for variant delete
-      const syncQueue = getLocalStorageData<SyncQueueItem[]>('syncQueue', []);
-      syncQueue.push({
-        id: 'sync_' + Math.random().toString(36).substr(2, 9),
-        table_name: 'product_variants_delete',
-        operation: 'DELETE',
-        record_id: variantId,
-        data: JSON.stringify({ id: variantId }),
-        status: 'pending',
-        created_at: new Date().toISOString()
-      });
-      setLocalStorageData('syncQueue', syncQueue);
-
-      const logs = getLocalStorageData<ActivityLog[]>('logs', []);
-      logs.push({
-        id: 'log_' + Math.random().toString(36).substr(2, 9),
-        user_id: userId,
-        username,
-        action: 'VARIANT_DELETED',
-        details: `حذف الصنف (الباركود: ${matched.sku_barcode}) نهائياً من المخزن.`,
-        created_at: new Date().toISOString()
-      });
-      setLocalStorageData('logs', logs);
-
-      return { success: true };
-    }
-  },
-
-  // Delete Supplier
-  async deleteSupplier(supplierId: string, userId: string, username: string): Promise<{ success: boolean }> {
-    if (isElectron) {
-      return await window.api.deleteSupplier(supplierId, userId, username);
-    } else {
-      const suppliers = getLocalStorageData<Supplier[]>('suppliers', []);
-      const matched = suppliers.find(s => s.id === supplierId);
-      if (!matched) throw new Error('Supplier not found');
-
-      setLocalStorageData('suppliers', suppliers.filter(s => s.id !== supplierId));
-      
-      const debts = getLocalStorageData<SupplierDebtTransaction[]>('debts', []);
-      setLocalStorageData('debts', debts.filter(d => d.supplier_id !== supplierId));
-
-      const syncQueue = getLocalStorageData<SyncQueueItem[]>('syncQueue', []);
-      syncQueue.push({
-        id: 'sync_' + Math.random().toString(36).substr(2, 9),
-        table_name: 'suppliers_delete',
-        operation: 'DELETE',
-        record_id: supplierId,
-        data: JSON.stringify({ id: supplierId }),
-        status: 'pending',
-        created_at: new Date().toISOString()
-      });
-      setLocalStorageData('syncQueue', syncQueue);
-
-      const logs = getLocalStorageData<ActivityLog[]>('logs', []);
-      logs.push({
-        id: 'log_' + Math.random().toString(36).substr(2, 9),
-        user_id: userId,
-        username,
-        action: 'SUPPLIER_DELETED',
-        details: `حذف المورد ${matched.name} نهائياً وحذف جميع حركات ديونه.`,
-        created_at: new Date().toISOString()
-      });
-      setLocalStorageData('logs', logs);
-
-      return { success: true };
-    }
-  },
-
-  // Delete Sale (invoice)
-  async deleteSale(saleId: string, userId: string, username: string): Promise<{ success: boolean }> {
-    if (isElectron) {
-      return await window.api.deleteSale(saleId, userId, username);
-    } else {
-      const sales = getLocalStorageData<any[]>('sales', []);
-      const matched = sales.find(s => s.id === saleId);
-      if (!matched) throw new Error('Sale not found');
-
-      const saleItems = getLocalStorageData<any[]>('saleItems', []);
-      const items = saleItems.filter(item => item.sale_id === saleId);
-      const variants = getLocalStorageData<ProductVariant[]>('variants', []);
-      
-      items.forEach(item => {
-        const variant = variants.find(v => v.id === item.variant_id);
-        if (variant) {
-          variant.stock_quantity += item.quantity;
-        }
-      });
-      setLocalStorageData('variants', variants);
-
-      setLocalStorageData('sales', sales.filter(s => s.id !== saleId));
-      setLocalStorageData('saleItems', saleItems.filter(item => item.sale_id !== saleId));
-
-      const syncQueue = getLocalStorageData<SyncQueueItem[]>('syncQueue', []);
-      syncQueue.push({
-        id: 'sync_' + Math.random().toString(36).substr(2, 9),
-        table_name: 'sales_delete',
-        operation: 'DELETE',
-        record_id: saleId,
-        data: JSON.stringify({ id: saleId }),
-        status: 'pending',
-        created_at: new Date().toISOString()
-      });
-      setLocalStorageData('syncQueue', syncQueue);
-
-      const logs = getLocalStorageData<ActivityLog[]>('logs', []);
-      logs.push({
-        id: 'log_' + Math.random().toString(36).substr(2, 9),
-        user_id: userId,
-        username,
-        action: 'SALE_DELETED',
-        details: `حذف الفاتورة رقم ${matched.invoice_number} لـ ${matched.customer_name || 'عميل نقدي'} وإرجاع الكميات للمخزن.`,
-        created_at: new Date().toISOString()
-      });
-      setLocalStorageData('logs', logs);
-
-      return { success: true };
-    }
-  },
-
-  // Update discount on finalized sale
-  async updateSaleDiscount(
-    saleId: string,
-    newDiscount: number,
-    userId: string,
-    username: string,
-    reason: string = ''
-  ): Promise<{ success: boolean; newDiscount: number; newFinalAmount: number }> {
-    if (isElectron) {
-      return await window.api.updateSaleDiscount(saleId, newDiscount, userId, username, reason);
-    } else {
-      const sales = getLocalStorageData<any[]>('sales', []);
-      const matched = sales.find(s => s.id === saleId);
-      if (!matched) throw new Error('الفاتورة غير موجودة');
-
-      const discountNum = Math.max(0, Number(newDiscount) || 0);
-      const totalAmount = Number(matched.total_amount) || 0;
-      if (discountNum > totalAmount) {
-        throw new Error(`قيمة الخصم (${discountNum}) أكبر من إجمالي الفاتورة (${totalAmount})`);
-      }
-
-      const oldDiscount = Number(matched.discount) || 0;
-      const newFinalAmount = Math.max(0, totalAmount - discountNum);
-
-      matched.discount = discountNum;
-      matched.final_amount = newFinalAmount;
-      setLocalStorageData('sales', sales);
-
-      const syncQueue = getLocalStorageData<SyncQueueItem[]>('syncQueue', []);
-      syncQueue.push({
-        id: 'sync_' + Math.random().toString(36).substr(2, 9),
-        table_name: 'sales',
-        operation: 'UPDATE',
-        record_id: saleId,
-        data: JSON.stringify({ sale: matched }),
-        status: 'pending',
-        created_at: new Date().toISOString()
-      });
-      setLocalStorageData('syncQueue', syncQueue);
-
-      const logs = getLocalStorageData<ActivityLog[]>('logs', []);
-      logs.push({
-        id: 'log_' + Math.random().toString(36).substr(2, 9),
-        user_id: userId,
-        username,
-        action: 'SALE_DISCOUNT_UPDATED',
-        details: `تعديل خصم الفاتورة رقم ${matched.invoice_number} من ${oldDiscount} ج.م إلى ${discountNum} ج.م (الصافي الجديد: ${newFinalAmount} ج.م). ${reason ? 'السبب: ' + reason : ''}`,
-        created_at: new Date().toISOString()
-      });
-      setLocalStorageData('logs', logs);
-
-      return { success: true, newDiscount: discountNum, newFinalAmount };
-    }
-  },
-
-  // Reset all invoices & accounts
-  async resetAllInvoicesAndAccounts(userId: string, username: string): Promise<{ success: boolean }> {
-    if (isElectron) {
-      return await window.api.resetAllInvoicesAndAccounts(userId, username);
-    } else {
-      setLocalStorageData('sales', []);
-      setLocalStorageData('saleItems', []);
-      setLocalStorageData('debts', []);
-      
-      const suppliers = getLocalStorageData<Supplier[]>('suppliers', []);
-      suppliers.forEach(s => {
-        s.current_debt = 0;
-      });
-      setLocalStorageData('suppliers', suppliers);
-
-      const syncQueue = getLocalStorageData<SyncQueueItem[]>('syncQueue', []);
-      syncQueue.push({
-        id: 'sync_' + Math.random().toString(36).substr(2, 9),
-        table_name: 'reset_all',
-        operation: 'DELETE',
-        record_id: 'all',
-        data: JSON.stringify({ reset: true }),
-        status: 'pending',
-        created_at: new Date().toISOString()
-      });
-      setLocalStorageData('syncQueue', syncQueue);
-
-      const logs = getLocalStorageData<ActivityLog[]>('logs', []);
-      logs.push({
-        id: 'log_' + Math.random().toString(36).substr(2, 9),
-        user_id: userId,
-        username,
-        action: 'SYSTEM_RESET',
-        details: 'تم تصفير جميع الفواتير والحسابات وحسابات الموردين بالكامل.',
-        created_at: new Date().toISOString()
-      });
-      setLocalStorageData('logs', logs);
-
-      return { success: true };
-    }
-  },
-
   // Sync operations
   async getSyncQueue(): Promise<SyncQueueItem[]> {
     if (isElectron) {
@@ -644,6 +395,38 @@ export const dbClient = {
     } else {
       const debts = getLocalStorageData<SupplierDebtTransaction[]>('debts', []);
       return debts.filter(d => d.supplier_id === supplierId).sort((a,b) => b.created_at.localeCompare(a.created_at));
+    }
+  },
+
+  async updateInvoiceDiscount(saleId: string, newDiscount: number, cashierName: string): Promise<{ success: boolean; updatedSale?: any }> {
+    if (isElectron) {
+      return await window.api.updateInvoiceDiscount(saleId, newDiscount, cashierName);
+    } else {
+      const sales = getLocalStorageData<any[]>('sales', []);
+      const sale = sales.find(s => s.id === saleId);
+      if (!sale) throw new Error('الفاتورة غير موجودة');
+      newDiscount = Math.max(0, Number(newDiscount) || 0);
+      if (newDiscount > sale.total_amount) throw new Error('قيمة الخصم لا يمكن أن تتجاوز إجمالي الفاتورة');
+
+      const oldFinal = sale.final_amount;
+      const newFinal = Math.max(0, sale.total_amount - newDiscount);
+      const diff = oldFinal - newFinal;
+
+      sale.discount = newDiscount;
+      sale.final_amount = newFinal;
+      setLocalStorageData('sales', sales);
+
+      if (sale.payment_method === 'DEBT' && sale.credit_customer_id && diff !== 0) {
+        const customers = getLocalStorageData<any[]>('credit_customers', []);
+        const cust = customers.find(c => c.id === sale.credit_customer_id);
+        if (cust) {
+          cust.total_debt = Math.max(0, (cust.total_debt || 0) - diff);
+          setLocalStorageData('credit_customers', customers);
+        }
+      }
+
+      await this.logActivity('system', cashierName, 'INVOICE_DISCOUNT_UPDATED', `تعديل خصم الفاتورة ${sale.invoice_number} إلى ${newDiscount} ج.م (الصافي الجديد: ${newFinal} ج.م)`);
+      return { success: true, updatedSale: sale };
     }
   },
 
@@ -791,7 +574,7 @@ export const dbClient = {
       const users = getLocalStorageData<any[]>('cashier_users', []);
       const idx = users.findIndex(u => u.id === userData.id);
       if (idx !== -1) {
-        if (users[idx].username === 'admin' || users[idx].username === 'احمد مجدي') {
+        if (users[idx].username === 'admin') {
           return { success: false, error: 'Cannot modify primary Admin' };
         }
         users[idx] = { ...users[idx], ...userData };
@@ -809,7 +592,7 @@ export const dbClient = {
     } else {
       const users = getLocalStorageData<any[]>('cashier_users', []);
       const matched = users.find(u => u.id === userId);
-      if (matched && (matched.username === 'admin' || matched.username === 'احمد مجدي')) {
+      if (matched && matched.username === 'admin') {
         return { success: false, error: 'Cannot delete primary Admin' };
       }
       const filtered = users.filter(u => u.id !== userId);

@@ -1,9 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  RefreshCw, Wifi, WifiOff, Send, Database, Layers, CheckCircle2, ShieldAlert, 
-  TrendingUp, DollarSign, Percent, BarChart3, Activity, AlertTriangle, UploadCloud, 
-  Trash2, Printer, X, Calendar, Filter, ArrowUpRight, ArrowDownRight, PackageCheck
-} from 'lucide-react';
+import { RefreshCw, Wifi, WifiOff, Send, Database, Layers, CheckCircle2, ShieldAlert, TrendingUp, DollarSign, Percent, BarChart3, Activity, AlertTriangle, UploadCloud } from 'lucide-react';
 import { dbClient } from '../database/dbClient';
 import { SyncQueueItem } from '../types';
 import { createClient } from '@supabase/supabase-js';
@@ -41,26 +37,32 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   const [showInvoicesLedger, setShowInvoicesLedger] = useState(false);
   const [allSales, setAllSales] = useState<any[]>([]);
   const [searchInvoiceQuery, setSearchInvoiceQuery] = useState('');
+  const [searchRefundQuery, setSearchRefundQuery] = useState('');
   const [selectedInvoice, setSelectedInvoice] = useState<any | null>(null);
   const [selectedInvoiceItems, setSelectedInvoiceItems] = useState<any[]>([]);
-  const [confirmConfig, setConfirmConfig] = useState<{ message: string; onConfirm: () => void } | null>(null);
+  
+  // Refund logs state
+  const [ledgerTab, setLedgerTab] = useState<'sales' | 'refunds'>('sales');
+  const [refundLogs, setRefundLogs] = useState<any[]>([]);
 
-  // Edit Discount Modal States
-  const [editDiscountModal, setEditDiscountModal] = useState(false);
-  const [newDiscountValue, setNewDiscountValue] = useState(0);
-  const [discountReason, setDiscountReason] = useState('');
-
-  // Filters (Period & Payment Method matching alaseel_dashboard_final_mobile_prices.html)
-  const [periodFilter, setPeriodFilter] = useState<'7' | '30' | '90' | 'all'>('7');
-  const [paymentFilter, setPaymentFilter] = useState<string>('');
+  const loadRefundLogs = async () => {
+    try {
+      const logs = await (window as any).api.getRefundLogs();
+      setRefundLogs(logs || []);
+    } catch (e) {
+      console.error('Failed to load refund logs:', e);
+    }
+  };
 
   const openInvoicesLedger = async () => {
     try {
       const sales = await dbClient.dbQuery('SELECT * FROM sales ORDER BY created_at DESC');
       setAllSales(sales || []);
+      await loadRefundLogs();
       setShowInvoicesLedger(true);
       setSelectedInvoice(null);
       setSelectedInvoiceItems([]);
+      setLedgerTab('sales');
     } catch (e) {
       console.error('Failed to load sales ledger:', e);
     }
@@ -68,6 +70,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
 
   const handleSelectInvoice = async (invoice: any) => {
     setSelectedInvoice(invoice);
+    setRefundConfirmConfig(null);
     try {
       const items = await dbClient.dbQuery('SELECT * FROM sale_items WHERE sale_id = ?', [invoice.id]);
       setSelectedInvoiceItems(items || []);
@@ -76,102 +79,143 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
     }
   };
 
-  const handleOpenEditDiscount = () => {
-    if (!selectedInvoice) return;
-    setNewDiscountValue(selectedInvoice.discount || 0);
-    setDiscountReason('');
-    setEditDiscountModal(true);
+  // ── Discount Edit State & Handlers ─────────────────────────────────────
+  const [discountModalOpen, setDiscountModalOpen] = useState(false);
+  const [discountVal, setDiscountVal] = useState<number>(0);
+  const [discountSaving, setDiscountSaving] = useState(false);
+
+  const openDiscountModal = (invoice: any) => {
+    setDiscountVal(invoice.discount || 0);
+    setDiscountModalOpen(true);
   };
 
   const handleSaveDiscount = async () => {
     if (!selectedInvoice) return;
-    try {
-      const res = await dbClient.updateSaleDiscount(
-        selectedInvoice.id,
-        newDiscountValue,
-        currentUserId,
-        currentUsername,
-        discountReason
-      );
-
-      if (res.success) {
-        showAlert(`✅ تم تعديل الخصم على الفاتورة بنجاح! الصافي الجديد: ${res.newFinalAmount.toLocaleString()} ج.م`, 'success');
-        setEditDiscountModal(false);
-
-        const updatedInvoice = {
-          ...selectedInvoice,
-          discount: res.newDiscount,
-          final_amount: res.newFinalAmount
-        };
-        setSelectedInvoice(updatedInvoice);
-        setAllSales(prev => prev.map(s => s.id === selectedInvoice.id ? updatedInvoice : s));
-
-        loadAnalyticsData();
-        onRefreshData();
-      }
-    } catch (e: any) {
-      console.error(e);
-      showAlert(`❌ فشل تعديل الخصم: ${e.message || 'خطأ غير معروف'}`, 'error');
+    const num = Number(discountVal);
+    if (isNaN(num) || num < 0) {
+      showAlert('يرجى إدخال قيمة خصم صحيحة وغير سالبة.', 'warning');
+      return;
     }
-  };
-
-  const handleReprintReceipt = async () => {
-    if (!selectedInvoice) {
-      showAlert('يرجى اختيار الفاتورة أولاً.', 'warning');
+    if (num > selectedInvoice.total_amount) {
+      showAlert(`قيمة الخصم (${num} ج.م) لا يمكن أن تتجاوز إجمالي الفاتورة (${selectedInvoice.total_amount} ج.م).`, 'error');
       return;
     }
 
+    setDiscountSaving(true);
     try {
-      if (typeof window !== 'undefined' && window.api?.printReceipt) {
-        await window.api.printReceipt({
-          storeName: storeSettings.store_name || 'الأصيل لقطع الغيار',
-          phone: storeSettings.store_phone || '01012345678',
-          invoiceNumber: selectedInvoice.invoice_number,
-          cashierName: selectedInvoice.cashier_name || currentUsername,
-          customerName: selectedInvoice.customer_name || 'عميل نقدي',
-          items: (selectedInvoiceItems || []).map(item => ({
-            name: item.name || 'قطعة غيار',
-            origin: item.origin || 'غير محدد',
-            qty: item.quantity,
-            price: item.unit_price,
-            total: item.total_price
-          })),
-          totalAmount: Number(selectedInvoice.total_amount) || 0,
-          discount: Number(selectedInvoice.discount) || 0,
-          finalAmount: Number(selectedInvoice.final_amount) || 0,
-          paymentMethod: selectedInvoice.payment_method || 'CASH',
-          headerMsg: storeSettings.invoice_header || '',
-          footerMsg: storeSettings.invoice_footer || '',
-          qrCodeData: selectedInvoice.invoice_number
-        });
-        showAlert('🖨️ تم إرسال أمر إعادة طباعة الفاتورة إلى الطابعة الحرارية بنجاح!', 'success');
-      } else {
-        showAlert('إعادة الطباعة المباشرة متاحة فقط عبر تطبيق الديسكتوب.', 'warning');
+      const res = await dbClient.updateInvoiceDiscount(selectedInvoice.id, num, currentUsername);
+      if (res.success) {
+        showAlert(`✅ تم تعديل خصم الفاتورة ${selectedInvoice.invoice_number} بنجاح إلى ${num} ج.م`, 'success');
+        setDiscountModalOpen(false);
+        await refreshInvoiceAfterRefund(selectedInvoice.id);
       }
     } catch (err: any) {
-      console.error('Reprint error:', err);
-      showAlert(`فشل في الطباعة: ${err.message || 'خطأ غير معروف'}`, 'error');
+      showAlert(`❌ فشل تعديل الخصم: ${err?.message || 'خطأ غير معروف'}`, 'error');
+    } finally {
+      setDiscountSaving(false);
     }
   };
 
-  const handleDeleteInvoice = async (saleId: string) => {
-    setConfirmConfig({
-      message: 'هل أنت متأكد من حذف هذه الفاتورة نهائياً؟ سيتم إرجاع كميات جميع البنود إلى المخزن وإعادة حساب الحركات المالية.',
+  const handleReprintInvoice = async (invoice: any, items: any[]) => {
+    try {
+      const res = await dbClient.printReceipt({
+        storeName: storeSettings.store_name || 'الأصيل لقطع الغيار',
+        phone: storeSettings.store_phone || '',
+        invoiceNumber: invoice.invoice_number,
+        cashierName: invoice.cashier_name,
+        customerName: invoice.customer_name || 'عميل نقدي',
+        items: items.map(i => ({
+          name: i.name,
+          origin: i.origin,
+          qty: i.quantity,
+          price: i.unit_price,
+          total: i.total_price
+        })),
+        totalAmount: invoice.total_amount,
+        discount: invoice.discount,
+        finalAmount: invoice.final_amount,
+        paymentMethod: invoice.payment_method === 'CARD' ? 'فودافون كاش' : invoice.payment_method === 'DEBT' ? 'آجل' : 'كاش نقدي',
+        headerMsg: storeSettings.invoice_header || 'مرحباً بكم في محلات الأصيل لقطع الغيار',
+        footerMsg: storeSettings.invoice_footer || 'الفاتورة صالحة للمرتجع خلال 14 يوماً مع العبوة الأصلية',
+        qrCodeData: `INV:${invoice.invoice_number}|AMT:${invoice.final_amount}`
+      });
+      if (res.success) {
+        showAlert('🖨️ تم إرسال أمر طباعة الفاتورة المحدثة بنجاح إلى الطابعة.', 'success');
+      } else {
+        showAlert(res.error || 'فشل إرسال أمر الطباعة', 'warning');
+      }
+    } catch (e: any) {
+      showAlert(`خطأ أثناء الطباعة: ${e.message}`, 'error');
+    }
+  };
+
+  // ── Refund State & Handlers ──────────────────────────────────────────────
+  const [refundConfirmConfig, setRefundConfirmConfig] = useState<{
+    title: string;
+    message: string;
+    onConfirm: () => Promise<void>;
+  } | null>(null);
+  const [refundLoading, setRefundLoading] = useState(false);
+  const [partialRefundQty, setPartialRefundQty] = useState<Record<string, number>>({});
+
+  const refreshInvoiceAfterRefund = async (invoiceId: string) => {
+    try {
+      const sales = await dbClient.dbQuery('SELECT * FROM sales ORDER BY created_at DESC');
+      setAllSales(sales || []);
+      const updatedInvoice = (sales || []).find((s: any) => s.id === invoiceId);
+      if (updatedInvoice) {
+        setSelectedInvoice(updatedInvoice);
+        const items = await dbClient.dbQuery('SELECT * FROM sale_items WHERE sale_id = ?', [invoiceId]);
+        setSelectedInvoiceItems(items || []);
+      }
+      await loadRefundLogs();
+      loadAnalyticsData();
+      onRefreshData();
+    } catch (e) {
+      console.error('Failed to refresh after refund:', e);
+    }
+  };
+
+  const handlePartialRefund = (item: any) => {
+    const qty = partialRefundQty[item.id] || 1;
+    if (qty <= 0 || qty > item.quantity) {
+      showAlert(`الكمية المرتجعة يجب أن تكون بين 1 و ${item.quantity}`, 'error');
+      return;
+    }
+    setRefundConfirmConfig({
+      title: 'تأكيد المرتجع الجزئي',
+      message: `هل تريد إرجاع ${qty} قطعة من "${item.name}"؟ سيتم إرجاع الكمية للمخزن وتعديل قيمة الفاتورة.`,
       onConfirm: async () => {
+        setRefundLoading(true);
         try {
-          const res = await dbClient.deleteSale(saleId, currentUserId, currentUsername);
-          if (res.success) {
-            showAlert('تم حذف الفاتورة بنجاح وإعادة البضاعة للمخزن', 'success');
-            setSelectedInvoice(null);
-            setSelectedInvoiceItems([]);
-            // Refresh sales list
-            const sales = await dbClient.dbQuery('SELECT * FROM sales ORDER BY created_at DESC');
-            setAllSales(sales || []);
-            onRefreshData();
-          }
+          await (window as any).api.refundSaleItem(item.id, qty, currentUsername);
+          showAlert(`✅ تم مرتجع ${qty} قطعة من "${item.name}" بنجاح وإضافتها للمخزن`, 'success');
+          await refreshInvoiceAfterRefund(item.sale_id);
         } catch (e: any) {
-          console.error(e);
-          showAlert(`فشل حذف الفاتورة: ${e.message || 'خطأ غير معروف'}`, 'error');
+          showAlert(`❌ فشل المرتجع: ${e?.message || 'خطأ غير معروف'}`, 'error');
+        } finally {
+          setRefundLoading(false);
+          setRefundConfirmConfig(null);
+        }
+      }
+    });
+  };
+
+  const handleFullRefund = (invoice: any) => {
+    setRefundConfirmConfig({
+      title: 'تأكيد المرتجع الكامل',
+      message: `هل تريد إرجاع الفاتورة رقم "${invoice.invoice_number}" بالكامل؟ سيتم إرجاع جميع الأصناف للمخزن وتصفير قيمة الفاتورة.`,
+      onConfirm: async () => {
+        setRefundLoading(true);
+        try {
+          await (window as any).api.refundWholeSale(invoice.id, currentUsername);
+          showAlert(`✅ تم مرتجع الفاتورة ${invoice.invoice_number} بالكامل بنجاح وإضافة جميع الأصناف للمخزن`, 'success');
+          await refreshInvoiceAfterRefund(invoice.id);
+        } catch (e: any) {
+          showAlert(`❌ فشل المرتجع: ${e?.message || 'خطأ غير معروف'}`, 'error');
+        } finally {
+          setRefundLoading(false);
+          setRefundConfirmConfig(null);
         }
       }
     });
@@ -186,17 +230,21 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
     invoicesCount: 0,
     cashSales: 0,
     vodaSales: 0,
-    debtSales: 0,
-    totalEnteredStockCost: 0,
-    currentStockCost: 0
+    dailySales: 0,
+    totalStockCost: 0,
+    totalEnteredCost: 0,
+    totalEnteredQty: 0
   });
 
   const [topItems, setTopItems] = useState<Array<{ name: string; origin: string; qty: number; revenue: number }>>([]);
-  const [topProfitItems, setTopProfitItems] = useState<Array<{ name: string; origin: string; profit: number; revenue: number }>>([]);
-  const [stockAlertsList, setStockAlertsList] = useState<any[]>([]);
-  const [dailyChartPoints, setDailyChartPoints] = useState<Array<{ label: string; dateKey: string; sales: number; profit: number }>>([]);
-  const [categoryChartPoints, setCategoryChartPoints] = useState<Array<{ category: string; value: number; percent: number }>>([]);
   const [recentSales, setRecentSales] = useState<any[]>([]);
+
+  // Raw datasets for interactive charts (matching alaseel_dashboard_final_mobile_prices.html)
+  const [chartSales, setChartSales] = useState<any[]>([]);
+  const [chartSaleItems, setChartSaleItems] = useState<any[]>([]);
+  const [chartVariants, setChartVariants] = useState<any[]>([]);
+  const [chartPeriod, setChartPeriod] = useState<'7' | '30' | '90' | 'all'>('7');
+  const [chartPaymentMethod, setChartPaymentMethod] = useState<string>('');
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -221,161 +269,178 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
       const saleItems = await dbClient.dbQuery('SELECT * FROM sale_items');
       const variants = await dbClient.getVariants();
 
-      const salesList: any[] = sales || [];
-      const itemsList: any[] = saleItems || [];
-      const varList: any[] = variants || [];
+      const salesList = sales || [];
+      const itemsList = saleItems || [];
+      const varList = variants || [];
 
-      // 1. Filter sales by payment method & period
-      let filtered = salesList;
-      if (paymentFilter) {
-        filtered = filtered.filter(s => s.payment_method === paymentFilter);
-      }
-      if (periodFilter !== 'all') {
-        const days = Number(periodFilter);
-        const fromDate = new Date();
-        fromDate.setHours(0, 0, 0, 0);
-        fromDate.setDate(fromDate.getDate() - days + 1);
-        filtered = filtered.filter(s => new Date(s.created_at) >= fromDate);
-      }
-
-      const filteredSet = new Set(filtered.map(s => s.id));
-      const filteredItems = itemsList.filter(i => filteredSet.has(i.sale_id));
-
-      // Financials for filtered period
+      // 1. Core Calculations
       let totalRevenue = 0;
+      let totalCost = 0;
       let cashSales = 0;
       let vodaSales = 0;
-      let debtSales = 0;
+      let dailySales = 0;
 
-      filtered.forEach(s => {
-        const amount = Number(s.final_amount) || 0;
-        totalRevenue += amount;
-        if (s.payment_method === 'CARD' || (s.customer_name && s.customer_name.includes('فودافون'))) {
-          vodaSales += amount;
-        } else if (s.payment_method === 'DEBT') {
-          debtSales += amount;
+      const localTodayStr = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD in local time
+
+      salesList.forEach((s: any) => {
+        totalRevenue += s.final_amount;
+        
+        // Calculate today's sales
+        if (s.created_at && s.created_at.startsWith(localTodayStr)) {
+          dailySales += s.final_amount;
+        }
+
+        // Detect Vodafone Cash transactions (mapped to 'CARD' in DB or containing vodafone cash tag)
+        const isVodafone = s.payment_method === 'CARD' || (s.customer_name && s.customer_name.includes('فودافون كاش'));
+        if (isVodafone) {
+          vodaSales += s.final_amount;
         } else {
-          cashSales += amount;
+          cashSales += s.final_amount;
         }
       });
 
-      let totalCost = 0;
-      filteredItems.forEach(item => {
-        totalCost += (Number(item.cost_price) || 0) * (Number(item.quantity) || 0);
+      itemsList.forEach((item: any) => {
+        totalCost += (item.cost_price * item.quantity);
       });
 
       const netProfit = totalRevenue - totalCost;
       const profitMargin = totalRevenue > 0 ? Math.round((netProfit / totalRevenue) * 100) : 0;
 
-      // Warehouse Stock Values: All time entered cost
-      // Matches HTML: currentStockCost + all-time cost of what was sold
-      const currentStockCost = varList.reduce((sum, v) => sum + (Number(v.stock_quantity) || 0) * (Number(v.cost_price) || 0), 0);
-      const allTimeSoldCost = itemsList.reduce((sum, i) => sum + (Number(i.cost_price) || 0) * (Number(i.quantity) || 0), 0);
-      const totalEnteredStockCost = currentStockCost + allTimeSoldCost;
+      // Exact calculation from alaseel_dashboard_final_mobile_prices.html:
+      // إجمالي تكلفة البضاعة الداخلة = المخزون الحالي بالتكلفة + تكلفة ما تم بيعه
+      const currentStockCost = varList.reduce((sum: number, v: any) => sum + (Number(v.stock_quantity) || 0) * (Number(v.cost_price) || 0), 0);
+      const totalEnteredCost = currentStockCost + totalCost;
+      const totalEnteredQty = varList.reduce((sum: number, v: any) => sum + (Number(v.stock_quantity) || 0), 0) + itemsList.reduce((sum: number, i: any) => sum + (Number(i.quantity) || 0), 0);
+
+      setChartSales(salesList);
+      setChartSaleItems(itemsList);
+      setChartVariants(varList);
 
       setMetrics({
         totalSales: totalRevenue,
         totalCost,
         netProfit,
         profitMargin,
-        invoicesCount: filtered.length,
+        invoicesCount: salesList.length,
         cashSales,
         vodaSales,
-        debtSales,
-        totalEnteredStockCost,
-        currentStockCost
+        dailySales,
+        totalStockCost: currentStockCost,
+        totalEnteredCost,
+        totalEnteredQty
       });
 
-      // 2. Top Selling & Top Profitable items in filtered period
-      const itemGroups: Record<string, { name: string; origin: string; qty: number; revenue: number; cost: number }> = {};
-      filteredItems.forEach(item => {
-        const k = item.variant_id || item.name;
-        const matchedVar = varList.find(v => v.id === item.variant_id);
+      // 2. Top Selling Items Compilation
+      const itemGroups: Record<string, { name: string; origin: string; qty: number; revenue: number }> = {};
+      itemsList.forEach((item: any) => {
+        const vId = item.variant_id;
+        const matchedVar = varList.find(v => v.id === vId);
         const name = item.name || matchedVar?.product_name || 'قطعة غيار';
         const origin = item.origin || matchedVar?.origin || 'غير محدد';
-        const q = Number(item.quantity) || 0;
-        const rev = Number(item.total_price) || (Number(item.unit_price) || 0) * q;
-        const cost = (Number(item.cost_price) || 0) * q;
 
-        if (!itemGroups[k]) {
-          itemGroups[k] = { name, origin, qty: 0, revenue: 0, cost: 0 };
+        if (!itemGroups[vId]) {
+          itemGroups[vId] = { name, origin, qty: 0, revenue: 0 };
         }
-        itemGroups[k].qty += q;
-        itemGroups[k].revenue += rev;
-        itemGroups[k].cost += cost;
+        itemGroups[vId].qty += item.quantity;
+        itemGroups[vId].revenue += item.total_price;
       });
 
-      const topByQty = Object.values(itemGroups)
+      const sortedItems = Object.values(itemGroups)
         .sort((a, b) => b.qty - a.qty)
-        .slice(0, 5);
-      setTopItems(topByQty);
+        .slice(0, 5); // top 5 items
+      setTopItems(sortedItems);
 
-      const topByProfit = Object.values(itemGroups)
-        .map(i => ({ name: i.name, origin: i.origin, profit: i.revenue - i.cost, revenue: i.revenue }))
-        .sort((a, b) => b.profit - a.profit)
-        .slice(0, 5);
-      setTopProfitItems(topByProfit);
-
-      // 3. Low stock alerts (variants <= min_limit)
-      const alerts = varList
-        .filter(v => Number(v.stock_quantity || 0) <= Number(v.min_limit || 0))
-        .sort((a, b) => Number(a.stock_quantity) - Number(b.stock_quantity))
-        .slice(0, 5);
-      setStockAlertsList(alerts);
-
-      // 4. Daily chart points for filtered period
-      const daysCount = periodFilter === '7' ? 7 : periodFilter === '30' ? 30 : periodFilter === '90' ? 90 : 7;
-      const dailyPoints: Array<{ label: string; dateKey: string; sales: number; profit: number }> = [];
-      const now = new Date();
-
-      for (let i = daysCount - 1; i >= 0; i--) {
-        const d = new Date(now);
-        d.setHours(0, 0, 0, 0);
-        d.setDate(d.getDate() - i);
-        const dateKey = d.toISOString().slice(0, 10);
-        const label = d.toLocaleDateString('ar-EG', { weekday: 'short', day: 'numeric' });
-
-        const daySales = filtered.filter(s => String(s.created_at).slice(0, 10) === dateKey);
-        const dayRevenue = daySales.reduce((acc, s) => acc + (Number(s.final_amount) || 0), 0);
-        const daySaleIds = new Set(daySales.map(s => s.id));
-        const dayCost = filteredItems
-          .filter(it => daySaleIds.has(it.sale_id))
-          .reduce((acc, it) => acc + (Number(it.cost_price) || 0) * (Number(it.quantity) || 0), 0);
-        const dayProfit = dayRevenue - dayCost;
-
-        dailyPoints.push({ label, dateKey, sales: dayRevenue, profit: dayProfit });
-      }
-      setDailyChartPoints(dailyPoints);
-
-      // 5. Category breakdown
-      const catMap: Record<string, number> = {};
-      varList.forEach(v => {
-        const cat = v.category || 'عام';
-        const val = (Number(v.stock_quantity) || 0) * (Number(v.selling_price) || 0);
-        catMap[cat] = (catMap[cat] || 0) + val;
-      });
-      const totalCatVal = Object.values(catMap).reduce((a, b) => a + b, 0);
-      const catList = Object.entries(catMap)
-        .map(([category, value]) => ({
-          category,
-          value,
-          percent: totalCatVal > 0 ? Math.round((value / totalCatVal) * 100) : 0
-        }))
-        .sort((a, b) => b.value - a.value)
-        .slice(0, 6);
-      setCategoryChartPoints(catList);
-
-      // 6. Recent sales
-      setRecentSales(filtered.slice(0, 6));
+      // 3. Recent Transactions
+      setRecentSales(salesList.slice(0, 5));
 
     } catch (e) {
       console.error('Failed to compile analytics:', e);
     }
   };
 
+  // Filtered sales for the charts (matching alaseel_dashboard_final_mobile_prices.html)
+  const filteredSalesForChart = useMemo(() => {
+    let list = chartSales.filter(s => !chartPaymentMethod || s.payment_method === chartPaymentMethod);
+    if (chartPeriod !== 'all') {
+      const days = Number(chartPeriod);
+      const from = new Date();
+      from.setHours(0, 0, 0, 0);
+      from.setDate(from.getDate() - days + 1);
+      list = list.filter(s => new Date(s.created_at) >= from);
+    }
+    return list;
+  }, [chartSales, chartPeriod, chartPaymentMethod]);
+
+  // Daily Sales & Profits trend data
+  const salesChartData = useMemo(() => {
+    const daysCount = chartPeriod === '7' ? 7 : chartPeriod === '30' ? 30 : chartPeriod === '90' ? 90 : 30;
+    const now = new Date();
+    const result: Array<{ dateKey: string; label: string; sales: number; profit: number; cogs: number }> = [];
+
+    const itemCostBySaleId: Record<string, number> = {};
+    chartSaleItems.forEach((it: any) => {
+      if (!itemCostBySaleId[it.sale_id]) itemCostBySaleId[it.sale_id] = 0;
+      itemCostBySaleId[it.sale_id] += (Number(it.cost_price) || 0) * (Number(it.quantity) || 0);
+    });
+
+    for (let i = daysCount - 1; i >= 0; i--) {
+      const d = new Date(now);
+      d.setHours(0, 0, 0, 0);
+      d.setDate(d.getDate() - i);
+      const dateKey = d.toLocaleDateString('en-CA');
+      const label = d.toLocaleDateString('ar-EG', { weekday: daysCount <= 7 ? 'short' : undefined, day: 'numeric', month: 'numeric' });
+
+      const daySales = filteredSalesForChart.filter(s => s.created_at && s.created_at.startsWith(dateKey));
+      const daySalesTotal = daySales.reduce((sum, s) => sum + (Number(s.final_amount) || 0), 0);
+      const dayCostTotal = daySales.reduce((sum, s) => sum + (itemCostBySaleId[s.id] || 0), 0);
+      const dayProfit = daySalesTotal - dayCostTotal;
+
+      result.push({
+        dateKey,
+        label,
+        sales: daySalesTotal,
+        profit: dayProfit,
+        cogs: dayCostTotal
+      });
+    }
+
+    const maxVal = Math.max(...result.map(r => Math.max(r.sales, r.profit, 100)));
+    const totalSalesPeriod = result.reduce((sum, r) => sum + r.sales, 0);
+    const totalProfitPeriod = result.reduce((sum, r) => sum + r.profit, 0);
+
+    return { points: result, maxVal, totalSalesPeriod, totalProfitPeriod };
+  }, [filteredSalesForChart, chartSaleItems, chartPeriod]);
+
+  // Category distribution data (matching alaseel_dashboard_final_mobile_prices.html)
+  const categoryChartData = useMemo(() => {
+    const catMap: Record<string, number> = {};
+    chartVariants.forEach((v: any) => {
+      const cat = v.category || 'غير مصنف';
+      const val = (Number(v.stock_quantity) || 0) * (Number(v.selling_price) || 0);
+      catMap[cat] = (catMap[cat] || 0) + val;
+    });
+
+    const entries = Object.entries(catMap)
+      .map(([name, value]) => ({ name, value }))
+      .filter(x => x.value > 0)
+      .sort((a, b) => b.value - a.value);
+
+    const totalVal = entries.reduce((sum, x) => sum + x.value, 0);
+    const colors = ['#2563eb', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#64748b', '#f97316'];
+
+    return {
+      entries: entries.slice(0, 7).map((e, idx) => ({
+        ...e,
+        color: colors[idx % colors.length],
+        percent: totalVal > 0 ? ((e.value / totalVal) * 100).toFixed(1) : '0'
+      })),
+      totalVal
+    };
+  }, [chartVariants]);
+
   useEffect(() => {
     loadAnalyticsData();
-  }, [syncQueueCount, periodFilter, paymentFilter]);
+  }, [syncQueueCount]);
 
   const isSupabaseConfigured = useMemo(() => {
     return !!(storeSettings.supabase_url && storeSettings.supabase_anon_key);
@@ -468,6 +533,26 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
           } else if (item.table_name === 'product_variants') {
             const { error: varErr } = await supabase.from('product_variants').upsert(payload);
             if (varErr) throw varErr;
+
+          } else if (item.table_name === 'products_delete') {
+            const { error: delErr } = await supabase.from('products').delete().eq('id', payload.id);
+            if (delErr) throw delErr;
+
+          } else if (item.table_name === 'product_variants_delete') {
+            const { error: delErr } = await supabase.from('product_variants').delete().eq('id', payload.id);
+            if (delErr) throw delErr;
+            if (payload.deleteProduct) {
+              const { error: pDelErr } = await supabase.from('products').delete().eq('id', payload.product_id);
+              if (pDelErr) throw pDelErr;
+            }
+
+          } else if (item.table_name === 'suppliers_delete') {
+            const { error: delErr } = await supabase.from('suppliers').delete().eq('id', payload.id);
+            if (delErr) throw delErr;
+
+          } else if (item.table_name === 'credit_customers_delete') {
+            const { error: delErr } = await supabase.from('credit_customers').delete().eq('id', payload.id);
+            if (delErr) throw delErr;
           }
 
           // Mark as synced locally
@@ -520,6 +605,10 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
       case 'suppliers': return 'حركة ديون/حساب مورد';
       case 'product_variants': return 'تعديل مخزون قطعة غيار';
       case 'products': return 'تكويد صنف جديد بالمخزن';
+      case 'products_delete': return 'حذف صنف من المخزن';
+      case 'product_variants_delete': return 'حذف متغير/منشأ قطعة غيار';
+      case 'suppliers_delete': return 'حذف مورد نهائياً';
+      case 'credit_customers_delete': return 'حذف عميل آجل نهائياً';
       default: return tbl;
     }
   };
@@ -540,6 +629,9 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
       if (item.table_name === 'product_variants') {
         const qty = payload.stock_quantity || 0;
         return `تعديل رصيد الصنف لتصبح الكمية ${qty}`;
+      }
+      if (item.table_name.endsWith('_delete')) {
+        return `إجراء حذف نهائي للمعرف: ${payload.id}`;
       }
       return 'تحديث بيانات النظام';
     } catch {
@@ -764,401 +856,472 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
       </div>
 
 
-      {/* Filter and Period Controls matching alaseel_dashboard_final_mobile_prices.html */}
-      <div className="glass-panel p-4 bg-panel border-main flex flex-wrap items-center justify-between gap-4">
-        <div className="flex flex-wrap items-center gap-3">
+      {/* Analytics statistics cards grid (matching alaseel_dashboard_final_mobile_prices.html) */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3.5">
+        {/* Daily Sales Card */}
+        <div className="glass-panel p-3.5 bg-panel border-main flex items-center gap-3 border-r-4 border-r-blue-500">
+          <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center text-blue-500 shrink-0">
+            <DollarSign className="w-5 h-5 animate-pulse" />
+          </div>
+          <div>
+            <p className="text-[10px] text-muted font-bold">مبيعات اليوم</p>
+            <p className="text-lg font-black text-blue-500 mt-0.5">{metrics.dailySales.toLocaleString()} <span className="text-[10px] font-normal">ج.م</span></p>
+          </div>
+        </div>
+
+        <div className="glass-panel p-3.5 bg-panel border-main flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-500 shrink-0">
+            <DollarSign className="w-5 h-5" />
+          </div>
+          <div>
+            <p className="text-[10px] text-muted font-bold">إجمالي المبيعات</p>
+            <p className="text-lg font-black text-main mt-0.5">{metrics.totalSales.toLocaleString()} <span className="text-[10px] font-normal">ج.م</span></p>
+            <p className="text-[9px] text-muted font-mono">{metrics.invoicesCount} فاتورة</p>
+          </div>
+        </div>
+
+        <div className="glass-panel p-3.5 bg-panel border-main flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-500 shrink-0">
+            <BarChart3 className="w-5 h-5" />
+          </div>
+          <div>
+            <p className="text-[10px] text-muted font-bold">تكلفة المباع</p>
+            <p className="text-lg font-black text-main mt-0.5">{metrics.totalCost.toLocaleString()} <span className="text-[10px] font-normal">ج.م</span></p>
+            <p className="text-[9px] text-muted">تكلفة القطع المباعة</p>
+          </div>
+        </div>
+
+        <div className="glass-panel p-3.5 bg-panel border-main flex items-center gap-3 border-l-4 border-l-emerald-500">
+          <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-600 dark:text-emerald-400 shrink-0">
+            <TrendingUp className="w-5 h-5" />
+          </div>
+          <div>
+            <p className="text-[10px] text-muted font-bold">صافي الأرباح</p>
+            <p className="text-lg font-black text-emerald-600 dark:text-emerald-400 mt-0.5">{metrics.netProfit.toLocaleString()} <span className="text-[10px] font-normal">ج.م</span></p>
+            <p className="text-[9px] text-emerald-600/80 font-bold">هامش: {metrics.profitMargin}%</p>
+          </div>
+        </div>
+
+        <div className="glass-panel p-3.5 bg-panel border-main flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center text-purple-500 shrink-0">
+            <Percent className="w-5 h-5" />
+          </div>
+          <div>
+            <p className="text-[10px] text-muted font-bold">هامش الربح</p>
+            <p className="text-lg font-black text-purple-500 mt-0.5">{metrics.profitMargin}%</p>
+            <p className="text-[9px] text-muted">الربح ÷ المبيعات</p>
+          </div>
+        </div>
+
+        {/* Total Warehouse Entered Cost Card (Matching alaseel_dashboard_final_mobile_prices.html red card) */}
+        <div className="glass-panel p-3.5 bg-panel border-main flex items-center gap-3 border-l-4 border-l-rose-500">
+          <div className="w-10 h-10 rounded-xl bg-rose-500/10 flex items-center justify-center text-rose-500 shrink-0">
+            <span className="text-lg font-black">▣</span>
+          </div>
+          <div>
+            <p className="text-[10px] text-rose-600 dark:text-rose-400 font-extrabold">إجمالي تكلفة البضاعة الداخلة</p>
+            <p className="text-lg font-black text-rose-600 dark:text-rose-400 mt-0.5">{metrics.totalEnteredCost.toLocaleString()} <span className="text-[10px] font-normal">ج.م</span></p>
+            <p className="text-[8px] text-muted leading-tight">المخزون الحالي بالتكلفة + تكلفة ما تم بيعه</p>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Interactive Charts Section (matching alaseel_dashboard_final_mobile_prices.html) ── */}
+      <div className="space-y-4">
+        {/* Filter controls row */}
+        <div className="glass-panel p-3.5 bg-panel border-main flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <Calendar className="w-4 h-4 text-blue-500" />
-            <span className="text-xs font-bold text-muted">الفترة:</span>
-            <select
-              value={periodFilter}
-              onChange={(e) => setPeriodFilter(e.target.value as any)}
-              className="bg-input-field border border-main text-main text-xs font-bold rounded-xl py-2 px-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="7">آخر 7 أيام</option>
-              <option value="30">آخر 30 يوم</option>
-              <option value="90">آخر 90 يوم</option>
-              <option value="all">كل الفترات السابقة</option>
-            </select>
+            <span className="text-xs font-bold text-muted">الفترة الزمنية للرسم:</span>
+            <div className="flex gap-1 bg-main p-1 rounded-xl border border-main">
+              {(['7', '30', '90', 'all'] as const).map(p => (
+                <button
+                  key={p}
+                  onClick={() => setChartPeriod(p)}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                    chartPeriod === p
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'text-muted hover:text-main'
+                  }`}
+                >
+                  {p === '7' ? 'آخر 7 أيام' : p === '30' ? 'آخر 30 يوم' : p === '90' ? 'آخر 90 يوم' : 'كل الفترات'}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <Filter className="w-4 h-4 text-indigo-500" />
-            <span className="text-xs font-bold text-muted">الدفع:</span>
+            <span className="text-xs font-bold text-muted">طريقة الدفع:</span>
             <select
-              value={paymentFilter}
-              onChange={(e) => setPaymentFilter(e.target.value)}
-              className="bg-input-field border border-main text-main text-xs font-bold rounded-xl py-2 px-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              value={chartPaymentMethod}
+              onChange={e => setChartPaymentMethod(e.target.value)}
+              className="bg-main border border-main text-main text-xs font-bold rounded-xl px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              <option value="">جميع طرق الدفع</option>
-              <option value="CASH">نقدي / كاش</option>
+              <option value="">كل طرق الدفع</option>
+              <option value="CASH">نقدي (كاش)</option>
               <option value="CARD">فودافون كاش / بطاقة</option>
-              <option value="DEBT">آجل (ديون عملاء)</option>
+              <option value="DEBT">آجل / دين</option>
             </select>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            onClick={openInvoicesLedger}
-            className="bg-main hover:bg-panel-hover border border-main text-main font-bold py-2 px-4 rounded-xl text-xs flex items-center gap-1.5 transition-all active:scale-95 shadow-sm"
-          >
-            <Layers className="w-4 h-4 text-blue-500" />
-            سجل الفواتير التفصيلي وتعديل الخصومات
-          </button>
-        </div>
-      </div>
-
-      {/* Primary Analytics Stats Cards Grid (Matching alaseel_dashboard_final_mobile_prices.html) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* 1. Total Net Sales */}
-        <div className="glass-panel p-5 bg-panel border-main flex items-center justify-between border-l-4 border-l-blue-500 shadow-sm">
-          <div>
-            <div className="flex items-center gap-1.5 text-xs text-muted font-bold mb-1">
-              <span>إجمالي المبيعات</span>
-              <span className="text-[10px] text-blue-500 font-normal">({metrics.invoicesCount} فاتورة)</span>
-            </div>
-            <p className="text-2xl font-black text-main">{metrics.totalSales.toLocaleString()} <span className="text-xs font-normal text-muted">ج.م</span></p>
-            <p className="text-[10px] text-muted mt-1">الصافي المحصل بعد الخصم</p>
-          </div>
-          <div className="w-11 h-11 rounded-2xl bg-blue-500/10 flex items-center justify-center text-blue-500">
-            <DollarSign className="w-6 h-6" />
-          </div>
-        </div>
-
-        {/* 2. COGS (Cost of Goods Sold) */}
-        <div className="glass-panel p-5 bg-panel border-main flex items-center justify-between border-l-4 border-l-amber-500 shadow-sm">
-          <div>
-            <p className="text-xs text-muted font-bold mb-1">تكلفة البضاعة المباعة</p>
-            <p className="text-2xl font-black text-main">{metrics.totalCost.toLocaleString()} <span className="text-xs font-normal text-muted">ج.م</span></p>
-            <p className="text-[10px] text-muted mt-1">تكلفة القطع المباعة في الفترة</p>
-          </div>
-          <div className="w-11 h-11 rounded-2xl bg-amber-500/10 flex items-center justify-center text-amber-500">
-            <BarChart3 className="w-6 h-6" />
-          </div>
-        </div>
-
-        {/* 3. Net Profit */}
-        <div className="glass-panel p-5 bg-panel border-main flex items-center justify-between border-l-4 border-l-emerald-500 shadow-sm">
-          <div>
-            <div className="flex items-center gap-1.5 text-xs text-muted font-bold mb-1">
-              <span>صافي الأرباح المحققة</span>
-              <span className="text-[10px] text-emerald-500 font-black">({metrics.profitMargin}%)</span>
-            </div>
-            <p className="text-2xl font-black text-emerald-600 dark:text-emerald-400">{metrics.netProfit.toLocaleString()} <span className="text-xs font-normal text-muted">ج.م</span></p>
-            <p className="text-[10px] text-muted mt-1">المبيعات − التكلفة</p>
-          </div>
-          <div className="w-11 h-11 rounded-2xl bg-emerald-500/10 flex items-center justify-center text-emerald-600 dark:text-emerald-400">
-            <TrendingUp className="w-6 h-6" />
-          </div>
-        </div>
-
-        {/* 4. Total Inbound Stock Cost (What entered warehouse) */}
-        <div className="glass-panel p-5 bg-panel border-main flex items-center justify-between border-l-4 border-l-rose-500 shadow-sm">
-          <div>
-            <p className="text-xs text-muted font-bold mb-1">إجمالي تكلفة البضاعة الداخلة</p>
-            <p className="text-2xl font-black text-rose-600 dark:text-rose-455">{metrics.totalEnteredStockCost.toLocaleString()} <span className="text-xs font-normal text-muted">ج.م</span></p>
-            <p className="text-[10px] text-muted mt-1 truncate max-w-[200px]" title="المخزون الحالي بالتكلفة + تكلفة ما تم بيعه">
-              المخزون بالتكلفة + تكلفة ما بيع
-            </p>
-          </div>
-          <div className="w-11 h-11 rounded-2xl bg-rose-500/10 flex items-center justify-center text-rose-500">
-            <PackageCheck className="w-6 h-6" />
-          </div>
-        </div>
-      </div>
-
-      {/* Interactive Charts Section (Sales/Profit Line & Category Doughnut) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left: Sales & Profit Line Chart (8 cols) */}
-        <div className="lg:col-span-8 glass-panel p-5 bg-panel border-main space-y-4">
-          <div className="flex justify-between items-center">
-            <div>
-              <h3 className="font-extrabold text-sm text-main">منحنى المبيعات والأرباح اليومية</h3>
-              <p className="text-[10px] text-muted">مقارنة حركة الإيرادات اليومية بصافي الأرباح المحققة خلال الفترة</p>
-            </div>
-            <div className="flex items-center gap-4 text-xs font-bold">
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded-full bg-blue-500"></span>
-                <span>المبيعات</span>
+        {/* Charts Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          {/* Sales & Profits Trend Chart (8 cols) */}
+          <div className="lg:col-span-8 glass-panel p-5 bg-panel border-main space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+              <div>
+                <h3 className="font-bold text-base text-main flex items-center gap-2">
+                  <TrendingUp className="w-5 h-5 text-blue-500" />
+                  منحنى المبيعات والأرباح
+                </h3>
+                <p className="text-[11px] text-muted mt-0.5">
+                  تتبع يومي دقيق لصافي المبيعات والأرباح الفعلية بعد خصم تكلفة البضاعة
+                </p>
               </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded-full bg-emerald-500"></span>
-                <span>الأرباح</span>
+              <div className="flex items-center gap-3 text-xs">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-3 h-3 rounded-full bg-blue-500 inline-block"></span>
+                  <span className="font-bold text-main">المبيعات: {salesChartData.totalSalesPeriod.toLocaleString()} ج.م</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-3 h-3 rounded-full bg-emerald-500 inline-block"></span>
+                  <span className="font-bold text-emerald-600 dark:text-emerald-400">الأرباح: {salesChartData.totalProfitPeriod.toLocaleString()} ج.م</span>
+                </div>
               </div>
             </div>
-          </div>
 
-          {/* SVG Visual Trend Chart */}
-          <div className="h-64 w-full relative flex flex-col justify-end pt-6 pb-2">
-            {dailyChartPoints.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-xs text-muted">لا توجد بيانات كافية للرسم البياني في الفترة المحددة.</div>
-            ) : (() => {
-              const maxVal = Math.max(...dailyChartPoints.map(p => Math.max(p.sales, p.profit, 100)));
-              return (
-                <div className="h-full flex items-end justify-between gap-2 px-2 pt-4 border-b border-main">
-                  {dailyChartPoints.map((pt, idx) => {
-                    const salesHeight = Math.max(4, Math.round((pt.sales / maxVal) * 180));
-                    const profitHeight = Math.max(4, Math.round((pt.profit / maxVal) * 180));
+            {/* SVG Interactive Line / Area Chart */}
+            <div className="w-full h-64 relative bg-main/40 rounded-2xl p-4 border border-main flex flex-col justify-end">
+              {salesChartData.points.length === 0 || salesChartData.totalSalesPeriod === 0 ? (
+                <div className="h-full flex items-center justify-center text-xs text-muted font-bold">
+                  لا توجد مبيعات مسجلة في هذه الفترة المحددة
+                </div>
+              ) : (
+                <svg className="w-full h-full overflow-visible" viewBox="0 0 800 200" preserveAspectRatio="none">
+                  <defs>
+                    <linearGradient id="salesGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.25" />
+                      <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.0" />
+                    </linearGradient>
+                    <linearGradient id="profitGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#10b981" stopOpacity="0.25" />
+                      <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
+                    </linearGradient>
+                  </defs>
+
+                  {/* Horizontal Guide lines */}
+                  {[0, 0.25, 0.5, 0.75, 1].map((pct, idx) => (
+                    <line
+                      key={idx}
+                      x1="0"
+                      y1={200 - pct * 180}
+                      x2="800"
+                      y2={200 - pct * 180}
+                      stroke="currentColor"
+                      strokeOpacity="0.07"
+                      strokeDasharray="4 4"
+                    />
+                  ))}
+
+                  {/* Generate path curves */}
+                  {(() => {
+                    const pts = salesChartData.points;
+                    const max = Math.max(salesChartData.maxVal, 1);
+                    const n = pts.length;
+                    const getX = (i: number) => (n <= 1 ? 400 : (i / (n - 1)) * 780 + 10);
+                    const getY = (val: number) => 190 - (Math.max(0, val) / max) * 160;
+
+                    let salesPath = `M ${getX(0)} ${getY(pts[0].sales)}`;
+                    let profitPath = `M ${getX(0)} ${getY(pts[0].profit)}`;
+
+                    for (let i = 1; i < n; i++) {
+                      const prevX = getX(i - 1);
+                      const prevY_s = getY(pts[i - 1].sales);
+                      const curX = getX(i);
+                      const curY_s = getY(pts[i].sales);
+                      const cpX1 = prevX + (curX - prevX) / 2;
+                      salesPath += ` C ${cpX1} ${prevY_s}, ${cpX1} ${curY_s}, ${curX} ${curY_s}`;
+
+                      const prevY_p = getY(pts[i - 1].profit);
+                      const curY_p = getY(pts[i].profit);
+                      profitPath += ` C ${cpX1} ${prevY_p}, ${cpX1} ${curY_p}, ${curX} ${curY_p}`;
+                    }
+
+                    const salesArea = `${salesPath} L ${getX(n - 1)} 190 L ${getX(0)} 190 Z`;
+                    const profitArea = `${profitPath} L ${getX(n - 1)} 190 L ${getX(0)} 190 Z`;
+
                     return (
-                      <div key={idx} className="flex-1 flex flex-col items-center gap-1 group relative h-full justify-end">
-                        {/* Tooltip on hover */}
-                        <div className="absolute -top-12 bg-black/90 text-white text-[10px] py-1 px-2 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20 whitespace-nowrap shadow-lg">
-                          <div>{pt.label} ({pt.dateKey})</div>
-                          <div className="text-blue-300">مبيعات: {pt.sales.toLocaleString()} ج.م</div>
-                          <div className="text-emerald-300">أرباح: {pt.profit.toLocaleString()} ج.م</div>
-                        </div>
+                      <>
+                        <path d={salesArea} fill="url(#salesGrad)" />
+                        <path d={salesPath} fill="none" stroke="#3b82f6" strokeWidth="3" strokeLinecap="round" />
+                        <path d={profitArea} fill="url(#profitGrad)" />
+                        <path d={profitPath} fill="none" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" />
 
-                        {/* Bars / Column Pair */}
-                        <div className="w-full flex justify-center items-end gap-1">
-                          <div
-                            style={{ height: `${salesHeight}px` }}
-                            className="w-3 sm:w-4 bg-blue-500/80 hover:bg-blue-500 rounded-t-md transition-all shadow-sm"
-                            title={`مبيعات: ${pt.sales} ج.م`}
-                          ></div>
-                          <div
-                            style={{ height: `${profitHeight}px` }}
-                            className="w-3 sm:w-4 bg-emerald-500/80 hover:bg-emerald-500 rounded-t-md transition-all shadow-sm"
-                            title={`أرباح: ${pt.profit} ج.م`}
-                          ></div>
-                        </div>
-
-                        {/* Label */}
-                        <span className="text-[10px] text-muted font-bold truncate max-w-[45px] mt-1">{pt.label}</span>
-                      </div>
+                        {pts.map((pt, i) => (
+                          <g key={i}>
+                            <circle cx={getX(i)} cy={getY(pt.sales)} r="3.5" fill="#3b82f6" stroke="#fff" strokeWidth="1.5">
+                              <title>{`${pt.label} | مبيعات: ${pt.sales.toLocaleString()} ج.م`}</title>
+                            </circle>
+                            <circle cx={getX(i)} cy={getY(pt.profit)} r="3" fill="#10b981" stroke="#fff" strokeWidth="1.5">
+                              <title>{`${pt.label} | ربح: ${pt.profit.toLocaleString()} ج.م`}</title>
+                            </circle>
+                          </g>
+                        ))}
+                      </>
                     );
-                  })}
-                </div>
-              );
-            })()}
-          </div>
-        </div>
+                  })()}
+                </svg>
+              )}
+            </div>
 
-        {/* Right: Category Distribution (4 cols) */}
-        <div className="lg:col-span-4 glass-panel p-5 bg-panel border-main space-y-4 flex flex-col justify-between">
-          <div>
-            <h3 className="font-extrabold text-sm text-main">قيمة المخزون حسب الفئات</h3>
-            <p className="text-[10px] text-muted">توزيع قيمة البضاعة المتاحة بسعر البيع</p>
+            {/* X-Axis labels */}
+            <div className="flex justify-between text-[10px] text-muted font-mono px-2">
+              {salesChartData.points
+                .filter((_, idx, arr) => arr.length <= 10 || idx % Math.ceil(arr.length / 8) === 0 || idx === arr.length - 1)
+                .map((pt, idx) => (
+                  <span key={idx}>{pt.label}</span>
+                ))}
+            </div>
           </div>
 
-          {/* Category bars breakdown */}
-          <div className="space-y-3 flex-1 flex flex-col justify-center">
-            {categoryChartPoints.length === 0 ? (
-              <p className="text-xs text-muted text-center py-8">لا توجد أصناف مسجلة.</p>
-            ) : (
-              categoryChartPoints.map((cat, idx) => {
-                const colors = ['bg-blue-500', 'bg-emerald-500', 'bg-indigo-500', 'bg-amber-500', 'bg-purple-500', 'bg-rose-500'];
-                const color = colors[idx % colors.length];
-                return (
-                  <div key={idx} className="space-y-1">
-                    <div className="flex justify-between text-xs font-bold">
-                      <span className="text-main">{cat.category}</span>
-                      <span className="text-muted font-mono">{cat.value.toLocaleString()} ج.م ({cat.percent}%)</span>
-                    </div>
-                    <div className="w-full bg-main h-2.5 rounded-full overflow-hidden border border-main">
-                      <div className={`${color} h-full transition-all`} style={{ width: `${cat.percent}%` }}></div>
-                    </div>
+          {/* Category Distribution Doughnut Chart (4 cols) */}
+          <div className="lg:col-span-4 glass-panel p-5 bg-panel border-main space-y-4 flex flex-col justify-between">
+            <div>
+              <h3 className="font-bold text-base text-main flex items-center gap-2">
+                <Layers className="w-5 h-5 text-indigo-500" />
+                قيمة المخزون حسب الفئة
+              </h3>
+              <p className="text-[11px] text-muted mt-0.5">
+                توزيع استثمارات بضاعة المحل بسعر البيع
+              </p>
+            </div>
+
+            {/* Doughnut SVG */}
+            <div className="relative flex items-center justify-center my-2">
+              <svg className="w-40 h-40 transform -rotate-90" viewBox="0 0 100 100">
+                {(() => {
+                  const total = categoryChartData.totalVal || 1;
+                  let accumulatedPercent = 0;
+                  return categoryChartData.entries.map((cat, idx) => {
+                    const strokePercent = (cat.value / total) * 100;
+                    const strokeDasharray = `${strokePercent} ${100 - strokePercent}`;
+                    const strokeDashoffset = -accumulatedPercent;
+                    accumulatedPercent += strokePercent;
+                    return (
+                      <circle
+                        key={idx}
+                        cx="50"
+                        cy="50"
+                        r="35"
+                        fill="transparent"
+                        stroke={cat.color}
+                        strokeWidth="14"
+                        strokeDasharray={strokeDasharray}
+                        strokeDashoffset={strokeDashoffset}
+                        pathLength="100"
+                        className="transition-all duration-500 hover:opacity-80"
+                      />
+                    );
+                  });
+                })()}
+              </svg>
+              <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none text-center">
+                <span className="text-[9px] text-muted font-bold">إجمالي البيع</span>
+                <span className="font-mono font-black text-sm text-main">
+                  {Math.round(categoryChartData.totalVal).toLocaleString()}
+                </span>
+                <span className="text-[8px] text-muted">ج.م</span>
+              </div>
+            </div>
+
+            {/* Category legend list */}
+            <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+              {categoryChartData.entries.map((cat, idx) => (
+                <div key={idx} className="flex justify-between items-center text-xs py-1 border-b border-main/50 last:border-0">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: cat.color }}></span>
+                    <span className="font-bold text-main truncate max-w-[120px]">{cat.name}</span>
                   </div>
-                );
-              })
-            )}
+                  <div className="text-left font-mono">
+                    <span className="font-bold text-main">{cat.value.toLocaleString()} ج.م</span>
+                    <span className="text-[10px] text-muted mr-1.5">({cat.percent}%)</span>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Grid 3: Top Selling, Top Profitable, and Low Stock Alerts */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Top Selling By Quantity */}
-        <div className="glass-panel p-5 bg-panel border-main space-y-3">
-          <div className="flex justify-between items-center pb-2 border-b border-main">
-            <h3 className="font-bold text-xs text-main flex items-center gap-1.5">
-              <Activity className="w-4 h-4 text-blue-500" />
-              الأكثر مبيعاً (بالكمية)
-            </h3>
-            <span className="text-[10px] text-muted font-bold">ضمن الفترة</span>
-          </div>
-
-          <div className="space-y-2 text-xs">
-            {topItems.length === 0 ? (
-              <p className="text-muted text-center py-6 text-[11px]">لا توجد مبيعات مسجلة في هذه الفترة.</p>
-            ) : (
-              topItems.map((item, idx) => (
-                <div key={idx} className="flex justify-between items-center py-1.5 border-b border-main/50 last:border-0">
-                  <div>
-                    <div className="font-bold text-main">{item.name}</div>
-                    <div className="text-[10px] text-muted font-normal">{item.origin}</div>
-                  </div>
-                  <span className="font-mono font-black text-blue-600 dark:text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded-md text-xs">
-                    {item.qty} قطعة
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* Top Profitable */}
-        <div className="glass-panel p-5 bg-panel border-main space-y-3">
-          <div className="flex justify-between items-center pb-2 border-b border-main">
-            <h3 className="font-bold text-xs text-main flex items-center gap-1.5">
-              <TrendingUp className="w-4 h-4 text-emerald-500" />
-              الأعلى ربحاً (صافي الربح)
-            </h3>
-            <span className="text-[10px] text-muted font-bold">ضمن الفترة</span>
-          </div>
-
-          <div className="space-y-2 text-xs">
-            {topProfitItems.length === 0 ? (
-              <p className="text-muted text-center py-6 text-[11px]">لا توجد بيانات أرباح في هذه الفترة.</p>
-            ) : (
-              topProfitItems.map((item, idx) => (
-                <div key={idx} className="flex justify-between items-center py-1.5 border-b border-main/50 last:border-0">
-                  <div>
-                    <div className="font-bold text-main">{item.name}</div>
-                    <div className="text-[10px] text-muted font-normal">{item.origin}</div>
-                  </div>
-                  <span className="font-mono font-black text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md text-xs">
-                    +{item.profit.toLocaleString()} ج.م
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* Stock Alerts (Critically Low) */}
-        <div className="glass-panel p-5 bg-panel border-main space-y-3">
-          <div className="flex justify-between items-center pb-2 border-b border-main">
-            <h3 className="font-bold text-xs text-rose-500 flex items-center gap-1.5">
-              <AlertTriangle className="w-4 h-4 text-rose-500" />
-              تنبيهات المخزون الحرِج
-            </h3>
-            <span className="text-[10px] text-muted font-bold">حد الطلب</span>
-          </div>
-
-          <div className="space-y-2 text-xs">
-            {stockAlertsList.length === 0 ? (
-              <p className="text-emerald-500 text-center py-6 text-[11px] font-bold">المخزون مستقر بالكامل ✓</p>
-            ) : (
-              stockAlertsList.map((v, idx) => (
-                <div key={idx} className="flex justify-between items-center py-1.5 border-b border-main/50 last:border-0">
-                  <div>
-                    <div className="font-bold text-main">{v.product_name}</div>
-                    <div className="text-[10px] text-muted font-normal">{v.origin}</div>
-                  </div>
-                  <span className={`font-mono font-black px-2 py-0.5 rounded-md text-xs ${
-                    v.stock_quantity === 0 ? 'bg-rose-600 text-white animate-pulse' : 'bg-rose-500/10 text-rose-500'
-                  }`}>
-                    {v.stock_quantity} / {v.min_limit} وحدة
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Recent Invoices & Sync Status Panels */}
+      {/* Analytics Breakdown split layout */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Recent Invoices (8 cols) */}
-        <div className="lg:col-span-8 glass-panel p-5 bg-panel border-main space-y-4">
-          <div className="flex justify-between items-center">
-            <h3 className="font-bold text-sm text-main">آخر الفواتير الصادرة</h3>
-            <button
-              onClick={openInvoicesLedger}
-              className="text-xs text-blue-500 hover:text-blue-400 font-bold"
-            >
-              عرض سجل الفواتير كاملاً وتعديل الخصومات ←
-            </button>
+        
+        {/* Left: Top selling items and Payment methods (8 cols) */}
+        <div className="lg:col-span-8 space-y-6">
+          
+          {/* Top Selling Items */}
+          <div className="glass-panel p-5 bg-panel border-main space-y-4">
+            <h3 className="font-bold text-base text-main flex items-center gap-2">
+              <Activity className="w-5 h-5 text-blue-500" />
+              القطع الأكثر مبيعاً وطلباً بالمحل (Top Selling)
+            </h3>
+            
+            <div className="border border-main rounded-xl overflow-hidden bg-main">
+              <table className="w-full text-right border-collapse text-xs">
+                <thead>
+                  <tr className="bg-panel-accent text-muted border-b border-main text-xs font-bold uppercase tracking-wider">
+                    <th className="py-3 px-4">اسم قطعة الغيار (المنشأ)</th>
+                    <th className="py-3 px-4 text-center">الكمية المباعة</th>
+                    <th className="py-3 px-4 text-left">قيمة المبيعات</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-main text-main font-semibold">
+                  {topItems.length === 0 ? (
+                    <tr>
+                      <td colSpan={3} className="py-8 text-center text-slate-500">لا توجد مبيعات مسجلة لعرض تحليلات الأصناف حالياً.</td>
+                    </tr>
+                  ) : (
+                    topItems.map((item, idx) => (
+                      <tr key={idx} className="hover:bg-panel-hover/50">
+                        <td className="py-3.5 px-4 font-bold text-main">{item.name} <span className="text-[10px] text-muted font-normal">({item.origin})</span></td>
+                        <td className="py-3.5 px-4 text-center text-blue-600 dark:text-blue-400 font-black">{item.qty} قطع</td>
+                        <td className="py-3.5 px-4 text-left text-emerald-500 font-black">{item.revenue.toLocaleString()} ج.م</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
 
-          <div className="border border-main rounded-xl overflow-hidden bg-main">
-            <table className="w-full text-right border-collapse text-xs">
-              <thead>
-                <tr className="bg-panel-accent text-muted border-b border-main text-xs font-bold">
-                  <th className="py-2.5 px-3">رقم الفاتورة</th>
-                  <th className="py-2.5 px-3">العميل</th>
-                  <th className="py-2.5 px-3">الدفع</th>
-                  <th className="py-2.5 px-3 text-left">الإجمالي</th>
-                  <th className="py-2.5 px-3 text-left">الخصم</th>
-                  <th className="py-2.5 px-3 text-left">الصافي</th>
-                  <th className="py-2.5 px-3 text-center">التاريخ</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-main text-main font-semibold">
-                {recentSales.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} className="py-6 text-center text-muted">لا توجد فواتير في الفترة المحددة.</td>
-                  </tr>
-                ) : (
-                  recentSales.map((s, idx) => (
-                    <tr key={idx} className="hover:bg-panel-hover/50">
-                      <td className="py-2.5 px-3 font-mono font-bold">{s.invoice_number}</td>
-                      <td className="py-2.5 px-3 text-muted">{s.customer_name || 'عميل نقدي'}</td>
-                      <td className="py-2.5 px-3">
-                        <span className="text-[10px] bg-panel px-2 py-0.5 rounded border border-main">
-                          {s.payment_method === 'CARD' ? 'فودافون كاش' : s.payment_method === 'DEBT' ? 'آجل' : 'نقدي'}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3 text-left font-mono">{(Number(s.total_amount) || 0).toLocaleString()} ج.م</td>
-                      <td className="py-2.5 px-3 text-left font-mono text-rose-500">
-                        {Number(s.discount) > 0 ? `-${Number(s.discount).toLocaleString()} ج.م` : '—'}
-                      </td>
-                      <td className="py-2.5 px-3 text-left font-mono font-black text-emerald-500">
-                        {(Number(s.final_amount) || 0).toLocaleString()} ج.م
-                      </td>
-                      <td className="py-2.5 px-3 text-center text-[10px] text-muted">
-                        {new Date(s.created_at).toLocaleDateString('ar-EG')}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+          {/* Payment Methods breakdown */}
+          <div className="glass-panel p-5 bg-panel border-main space-y-4">
+            <h3 className="font-bold text-base text-main">توزيع المبيعات حسب طريقة الدفع</h3>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
+              {/* Cash vs Vodafone cash visual comparison */}
+              <div className="space-y-4">
+                {/* Cash */}
+                <div>
+                  <div className="flex justify-between text-xs text-muted mb-1 font-bold">
+                    <span>نقدي / كاش</span>
+                    <span className="text-main font-black">{metrics.cashSales.toLocaleString()} ج.م ({metrics.totalSales > 0 ? Math.round((metrics.cashSales / metrics.totalSales) * 100) : 0}%)</span>
+                  </div>
+                  <div className="w-full bg-main h-3 rounded-full overflow-hidden border border-main">
+                    <div className="bg-emerald-500 h-full transition-all" style={{ width: `${metrics.totalSales > 0 ? (metrics.cashSales / metrics.totalSales) * 100 : 0}%` }}></div>
+                  </div>
+                </div>
+
+                {/* Vodafone Cash */}
+                <div>
+                  <div className="flex justify-between text-xs text-muted mb-1 font-bold">
+                    <span>فودافون كاش</span>
+                    <span className="text-main font-black">{metrics.vodaSales.toLocaleString()} ج.م ({metrics.totalSales > 0 ? Math.round((metrics.vodaSales / metrics.totalSales) * 100) : 0}%)</span>
+                  </div>
+                  <div className="w-full bg-main h-3 rounded-full overflow-hidden border border-main">
+                    <div className="bg-rose-500 h-full transition-all" style={{ width: `${metrics.totalSales > 0 ? (metrics.vodaSales / metrics.totalSales) * 100 : 0}%` }}></div>
+                  </div>
+                </div>
+              </div>
+
+              {/* General Insights */}
+              <div className="bg-panel-accent p-4 rounded-xl border border-main space-y-2 text-xs text-muted leading-relaxed">
+                <p className="font-bold text-main">💡 نظرة تحليلية سريعة:</p>
+                <p>
+                  إجمالي الفواتير المحررة بالمحل يبلغ <span className="font-bold text-main">{metrics.invoicesCount} فواتير</span>. 
+                  مبيعات الكاش النقدي تشكل النسبة الكبرى، تليها التحويلات الإلكترونية المستلمة عبر أرقام فودافون كاش المعتمدة بالمحل.
+                </p>
+              </div>
+            </div>
           </div>
+
         </div>
 
-        {/* Sync Status Queue (4 cols) */}
-        <div className="lg:col-span-4 glass-panel p-5 bg-panel border-main space-y-3 flex flex-col h-[320px]">
-          <div className="flex justify-between items-center pb-2 border-b border-main">
-            <h3 className="font-bold text-xs text-main flex items-center gap-1.5">
+        {/* Right: Recent transactions & Sync monitoring queue (4 cols) */}
+        <div className="lg:col-span-4 space-y-6">
+          
+          {/* Recent Invoices list */}
+          <div className="glass-panel p-4 bg-panel border-main flex flex-col h-[280px] overflow-hidden">
+            <div className="flex justify-between items-center mb-3 pb-2 border-b border-main">
+              <h3 className="font-bold text-xs text-main font-bold">آخر 5 فواتير مبيعات صادرة</h3>
+              <button
+                type="button"
+                onClick={openInvoicesLedger}
+                className="text-[10px] text-blue-500 hover:text-blue-400 font-bold active:scale-95 transition-all select-none"
+              >
+                عرض كل الفواتير
+              </button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
+              {recentSales.length === 0 ? (
+                <p className="text-xs text-slate-500 text-center py-8">لا توجد فواتير مبيعات مسجلة اليوم.</p>
+              ) : (
+                recentSales.map((sale, idx) => (
+                  <div key={idx} className="bg-panel-accent border border-main p-2.5 rounded-xl flex justify-between items-center text-xs">
+                    <div>
+                      <span className="font-bold text-main">{sale.invoice_number}</span>
+                      <p className="text-[10px] text-muted mt-1 truncate max-w-[150px]">{sale.customer_name}</p>
+                    </div>
+                    <span className="font-black text-emerald-500">{sale.final_amount.toFixed(0)} ج.م</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Sync status log */}
+          <div className="glass-panel p-4 bg-panel border-main flex flex-col h-[280px] overflow-hidden">
+            <h3 className="font-bold text-xs text-main mb-3 pb-2 border-b border-main flex justify-between items-center">
               <span>طابور المزامنة السحابية</span>
               {syncQueue.length > 0 && <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-ping"></span>}
             </h3>
-            <span className="text-[10px] text-muted font-bold">{syncQueue.length} معلقة</span>
+
+            <div className="flex-1 overflow-y-auto space-y-2.5 pr-1 text-xs">
+              {syncQueue.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-slate-500 text-center">
+                  <CheckCircle2 className="w-8 h-8 text-emerald-500 mb-1" />
+                  <p className="text-[11px] font-bold">جميع الحركات مزامنة وآمنة سحابياً</p>
+                </div>
+              ) : (
+                syncQueue.map(item => (
+                  <div key={item.id} className="bg-panel-accent border border-main p-2.5 rounded-xl space-y-1">
+                    <div className="flex justify-between items-center font-bold">
+                      <span className="text-main">{getArabicTableName(item.table_name)}</span>
+                      {item.status === 'failed' ? (
+                        <span className="text-[9px] bg-rose-500/10 text-rose-500 px-1.5 py-0.5 rounded border border-rose-500/10" title={item.error_message || ''}>فشلت</span>
+                      ) : (
+                        <span className="text-[9px] bg-amber-500/10 text-amber-600 px-1.5 py-0.5 rounded border border-amber-500/10">معلقة</span>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-muted">{getBusinessDetails(item)}</p>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto space-y-2 pr-1 text-xs">
-            {syncQueue.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-slate-500 text-center">
-                <CheckCircle2 className="w-8 h-8 text-emerald-500 mb-1" />
-                <p className="text-[11px] font-bold">جميع الحركات مزامنة ومحفوظة سحابياً</p>
-              </div>
-            ) : (
-              syncQueue.map(item => (
-                <div key={item.id} className="bg-panel-accent border border-main p-2.5 rounded-xl space-y-1">
-                  <div className="flex justify-between items-center font-bold">
-                    <span className="text-[11px] text-blue-500">{getArabicTableName(item.table_name)}</span>
-                    <span className="text-[9px] bg-amber-500/10 text-amber-500 px-1.5 py-0.5 rounded font-mono uppercase">{item.operation}</span>
-                  </div>
-                  <div className="text-[10px] text-muted font-mono truncate">معرف: {item.record_id}</div>
-                </div>
-              ))
-            )}
-          </div>
         </div>
+
       </div>
 
-      {/* Invoices History Ledger Modal */}
+      {/* Sync Logging details section */}
+      {syncing && (
+        <div className="glass-panel p-4 bg-blue-600/10 border-blue-500/20 text-blue-600 dark:text-blue-400 font-mono text-xs animate-pulse">
+          ⏳ {progressMsg}
+        </div>
+      )}
+
+      {/* Detailed Invoices Ledger Modal */}
       {showInvoicesLedger && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center p-6 z-50 animate-fade-in text-main select-text">
-          <div className="bg-panel border border-main rounded-3xl w-full max-w-5xl h-[85vh] flex flex-col overflow-hidden shadow-2xl">
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-6 z-40 animate-fade-in text-main">
+          <div className="bg-panel border border-main rounded-3xl w-full max-w-5xl h-[85vh] flex flex-col overflow-hidden shadow-2xl relative">
             
             {/* Modal Header */}
             <div className="p-5 border-b border-main flex justify-between items-center bg-panel-accent">
               <div>
-                <h3 className="font-extrabold text-base text-main">سجل الفواتير والمبيعات التفصيلي وتعديل الخصومات</h3>
-                <p className="text-[10px] text-muted mt-0.5">البحث والمراجعة التفصيلية وتعديل الخصم وإعادة الطباعة لأي فاتورة سابقة</p>
+                <h3 className="font-extrabold text-base text-main">سجل الفواتير والمبيعات التفصيلي (محلي)</h3>
+                <p className="text-[10px] text-muted mt-0.5">البحث والمراجعة التفصيلية لكافة عمليات البيع بالمحل دون طباعة</p>
               </div>
               <button
                 type="button"
@@ -1173,284 +1336,297 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
               </button>
             </div>
 
-            {/* Modal Main Content Split */}
-            <div className="flex-1 flex overflow-hidden divide-x divide-x-reverse divide-main">
-              
-              {/* Left Column: Search & Invoices List */}
-              <div className="w-1/2 flex flex-col p-5 overflow-hidden">
-                <div className="mb-4">
+            {/* Tab Selector */}
+            <div className="flex bg-panel border-b border-main px-5 py-2 gap-2 select-none shrink-0">
+              <button
+                type="button"
+                onClick={() => setLedgerTab('sales')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  ledgerTab === 'sales'
+                    ? 'bg-blue-600 text-white shadow-md'
+                    : 'text-muted hover:text-main bg-main'
+                }`}
+              >
+                📝 سجل فواتير المبيعات
+              </button>
+              <button
+                type="button"
+                onClick={() => setLedgerTab('refunds')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  ledgerTab === 'refunds'
+                    ? 'bg-rose-600 text-white shadow-md'
+                    : 'text-muted hover:text-main bg-main'
+                }`}
+              >
+                ↩️ سجل المرتجعات التفصيلي ({refundLogs.length})
+              </button>
+            </div>
+
+            {ledgerTab === 'sales' ? (
+              /* Modal Main Content Split (Sales Invoices Ledger) */
+              <div className="flex-1 flex overflow-hidden divide-x divide-x-reverse divide-main">
+                
+                {/* Left Column: Search & Invoices List */}
+                <div className="w-1/2 flex flex-col p-5 overflow-hidden">
+                  <div className="mb-4">
+                    <input
+                      type="text"
+                      placeholder="ابحث برقم الفاتورة أو العميل..."
+                      className="w-full bg-main border border-main text-main rounded-xl py-2.5 px-4 text-right focus:outline-none focus:ring-2 focus:ring-blue-500 text-xs font-bold"
+                      value={searchInvoiceQuery}
+                      onChange={(e) => setSearchInvoiceQuery(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
+                    {allSales
+                      .filter((sale: any) => {
+                        const num = (sale.invoice_number || '').toLowerCase();
+                        const cust = (sale.customer_name || '').toLowerCase();
+                        const term = searchInvoiceQuery.toLowerCase();
+                        return num.includes(term) || cust.includes(term);
+                      })
+                      .map((sale: any) => (
+                        <div
+                          key={sale.id}
+                          onClick={() => handleSelectInvoice(sale)}
+                          className={`p-3.5 rounded-xl border cursor-pointer transition-all flex justify-between items-center ${
+                            selectedInvoice?.id === sale.id
+                              ? 'border-blue-500 bg-blue-600/5'
+                              : 'border-main bg-panel-accent hover:border-slate-400 dark:hover:border-slate-700'
+                          }`}
+                        >
+                          <div>
+                            <div className="font-extrabold text-xs text-main">{sale.invoice_number}</div>
+                            <div className="text-[10px] text-muted mt-1">العميل: {sale.customer_name || 'نقدي'} | الكاشير: {sale.cashier_name}</div>
+                          </div>
+                          <div className="text-left font-black text-emerald-500 font-mono text-xs">
+                            {sale.final_amount.toLocaleString()} ج.م
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+
+                {/* Right Column: Selected Invoice Items Detail View */}
+                <div className="w-1/2 p-5 flex flex-col overflow-hidden bg-panel-accent/40">
+                  {selectedInvoice ? (
+                    <div className="flex-1 flex flex-col overflow-hidden space-y-4">
+                      {/* Invoice header info */}
+                      <div className="bg-panel border border-main p-4 rounded-2xl space-y-1.5">
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="text-muted">رقم الفاتورة:</span>
+                          <span className="font-mono font-black text-main text-sm">{selectedInvoice.invoice_number}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="text-muted">تاريخ البيع:</span>
+                          <span className="font-mono text-main">{new Date(selectedInvoice.created_at).toLocaleString('ar-EG')}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="text-muted">طريقة الدفع:</span>
+                          <span className="font-bold text-blue-500">
+                            {selectedInvoice.payment_method === 'CARD' ? 'فودافون كاش' : selectedInvoice.payment_method === 'DEBT' ? 'آجل / دين' : 'كاش نقدي'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Invoice items list */}
+                      <div className="flex-1 overflow-y-auto border border-main rounded-2xl bg-main">
+                        <table className="w-full text-right text-xs">
+                          <thead>
+                            <tr className="bg-panel-accent text-muted border-b border-main font-bold">
+                              <th className="py-2.5 px-3">اسم القطعة (المنشأ)</th>
+                              <th className="py-2.5 px-3 text-center">الكمية</th>
+                              <th className="py-2.5 px-3 text-left">الإجمالي</th>
+                              <th className="py-2.5 px-3 text-center">مرتجع</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-main text-main font-semibold">
+                            {selectedInvoiceItems.map((item: any) => (
+                              <tr key={item.id} className="hover:bg-panel-hover/40">
+                                <td className="py-2.5 px-3">
+                                  <div>{item.name}</div>
+                                  <div className="text-[9px] text-muted font-normal">{item.origin}</div>
+                                </td>
+                                <td className="py-2.5 px-3 text-center text-blue-500 font-bold font-mono">{item.quantity}</td>
+                                <td className="py-2.5 px-3 text-left text-emerald-500 font-bold font-mono">{item.total_price.toLocaleString()} ج.م</td>
+                                <td className="py-2 px-2">
+                                  <div className="flex items-center gap-1 justify-center">
+                                    <input
+                                      type="number"
+                                      min={1}
+                                      max={item.quantity}
+                                      value={partialRefundQty[item.id] ?? 1}
+                                      onChange={e => setPartialRefundQty(prev => ({ ...prev, [item.id]: parseInt(e.target.value) || 1 }))}
+                                      className="w-12 bg-input-field border border-main text-main rounded-lg text-center py-1 text-[10px]"
+                                    />
+                                    <button
+                                      onClick={() => handlePartialRefund(item)}
+                                      className="bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 rounded-lg px-2 py-1 text-[10px] font-bold transition-all whitespace-nowrap"
+                                    >
+                                      ↩️ رجّع
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Totals panel */}
+                      <div className="bg-panel border border-main p-4 rounded-2xl space-y-2 text-xs font-mono font-semibold">
+                        <div className="flex justify-between">
+                          <span className="text-muted">الإجمالي الفرعي:</span>
+                          <span className="text-main">{(selectedInvoice.total_amount || 0).toLocaleString()} ج.م</span>
+                        </div>
+                        <div className="flex justify-between items-center text-rose-500 font-bold">
+                          <div className="flex items-center gap-2">
+                            <span>الخصم المطبق:</span>
+                            <button
+                              onClick={() => openDiscountModal(selectedInvoice)}
+                              className="bg-amber-500/15 hover:bg-amber-500/25 text-amber-500 border border-amber-500/30 px-2 py-0.5 rounded-lg text-[10px] font-bold transition-all active:scale-95 flex items-center gap-1 font-sans cursor-pointer"
+                              title="تعديل خصم الفاتورة بعد البيع"
+                            >
+                              🏷️ تعديل الخصم
+                            </button>
+                          </div>
+                          <span>-{(selectedInvoice.discount || 0).toLocaleString()} ج.م</span>
+                        </div>
+                        <div className="flex justify-between text-sm font-black text-emerald-600 dark:text-emerald-400 border-t border-dashed border-main pt-2">
+                          <span>الصافي النهائي:</span>
+                          <span>{selectedInvoice.final_amount.toLocaleString()} ج.م</span>
+                        </div>
+                        
+                        {/* Action buttons */}
+                        <div className="grid grid-cols-2 gap-2 mt-2 pt-1 font-sans">
+                          <button
+                            onClick={() => openDiscountModal(selectedInvoice)}
+                            className="py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-500 border border-amber-500/30 font-bold text-xs transition-all active:scale-95 flex items-center justify-center gap-1.5"
+                          >
+                            🏷️ تعديل الخصم
+                          </button>
+                          <button
+                            onClick={() => handleReprintInvoice(selectedInvoice, selectedInvoiceItems)}
+                            className="py-2 rounded-xl bg-blue-500/15 hover:bg-blue-500/25 text-blue-500 border border-blue-500/30 font-bold text-xs transition-all active:scale-95 flex items-center justify-center gap-1.5"
+                          >
+                            🖨️ طباعة إيصال
+                          </button>
+                        </div>
+
+                        {selectedInvoiceItems.length > 0 && (
+                          <button
+                            onClick={() => handleFullRefund(selectedInvoice)}
+                            className="w-full mt-1 py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 font-bold text-xs transition-all active:scale-95 font-sans"
+                          >
+                            ↩️ مرتجع كامل للفاتورة بالكامل
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex-1 flex flex-col items-center justify-center text-slate-500 text-center space-y-2">
+                      <Activity className="w-12 h-12 text-slate-400 animate-pulse" />
+                      <p className="text-xs font-bold">يرجى تحديد فاتورة من القائمة الجانبية لعرض بنودها وتفاصيلها المالية بالكامل.</p>
+                    </div>
+                  )}
+                </div>
+
+              </div>
+            ) : (
+              /* Refunds Log View (Tab 2) */
+              <div className="flex-1 flex flex-col p-5 overflow-hidden space-y-4">
+                
+                {/* Stats & Search header row */}
+                <div className="flex flex-col md:flex-row justify-between items-stretch md:items-center gap-3">
+                  <div className="flex items-center gap-4">
+                    <div className="bg-rose-500/10 border border-rose-500/20 px-4 py-2 rounded-xl text-center">
+                      <div className="text-[10px] text-muted mb-0.5">إجمالي المبالغ المستردة</div>
+                      <div className="font-black text-rose-400 font-mono text-sm">
+                        {refundLogs
+                          .filter(log => !searchRefundQuery || (log.name || '').toLowerCase().includes(searchRefundQuery.toLowerCase()) || (log.invoice_number || '').toLowerCase().includes(searchRefundQuery.toLowerCase()))
+                          .reduce((sum, log) => sum + (log.refund_amount || 0), 0)
+                          .toLocaleString()} ج.م
+                      </div>
+                    </div>
+                    <div className="bg-panel-accent border border-main px-4 py-2 rounded-xl text-center">
+                      <div className="text-[10px] text-muted mb-0.5">عدد حركات الارتجاع</div>
+                      <div className="font-black text-main font-mono text-sm">
+                        {refundLogs.filter(log => !searchRefundQuery || (log.name || '').toLowerCase().includes(searchRefundQuery.toLowerCase()) || (log.invoice_number || '').toLowerCase().includes(searchRefundQuery.toLowerCase())).length} حركة
+                      </div>
+                    </div>
+                  </div>
+
                   <input
                     type="text"
-                    placeholder="ابحث برقم الفاتورة أو العميل..."
-                    className="w-full bg-main border border-main text-main rounded-xl py-2.5 px-4 text-right focus:outline-none focus:ring-2 focus:ring-blue-500 text-xs font-bold"
-                    value={searchInvoiceQuery}
-                    onChange={(e) => setSearchInvoiceQuery(e.target.value)}
+                    placeholder="ابحث باسم الصنف أو رقم الفاتورة..."
+                    className="bg-main border border-main text-main rounded-xl py-2 px-4 text-right focus:outline-none focus:ring-2 focus:ring-rose-500 text-xs font-bold w-full md:w-64"
+                    value={searchRefundQuery}
+                    onChange={(e) => setSearchRefundQuery(e.target.value)}
                   />
                 </div>
 
-                <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
-                  {allSales
-                    .filter((sale: any) => {
-                      const num = (sale.invoice_number || '').toLowerCase();
-                      const cust = (sale.customer_name || '').toLowerCase();
-                      const term = searchInvoiceQuery.toLowerCase();
-                      return num.includes(term) || cust.includes(term);
-                    })
-                    .map((sale: any) => (
-                      <div
-                        key={sale.id}
-                        onClick={() => handleSelectInvoice(sale)}
-                        className={`p-3.5 rounded-xl border cursor-pointer transition-all flex justify-between items-center ${
-                          selectedInvoice?.id === sale.id
-                            ? 'border-blue-500 bg-blue-600/5'
-                            : 'border-main bg-panel-accent hover:border-slate-400 dark:hover:border-slate-700'
-                        }`}
-                      >
-                        <div>
-                          <div className="font-extrabold text-xs text-main">{sale.invoice_number}</div>
-                          <div className="text-[10px] text-muted mt-1">
-                            العميل: {sale.customer_name || 'عميل نقدي'} | الكاشير: {sale.cashier_name}
-                          </div>
-                          {Number(sale.discount) > 0 && (
-                            <span className="inline-block mt-1 text-[9px] bg-rose-500/10 text-rose-500 px-1.5 py-0.5 rounded font-bold">
-                              خصم: -{Number(sale.discount).toLocaleString()} ج.م
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-left font-black text-emerald-500 font-mono text-xs">
-                          {Number(sale.final_amount).toLocaleString()} ج.م
-                        </div>
-                      </div>
-                    ))}
-                </div>
-              </div>
-
-              {/* Right Column: Selected Invoice Items Detail View */}
-              <div className="w-1/2 p-5 flex flex-col overflow-hidden bg-panel-accent/40">
-                {selectedInvoice ? (
-                  <div className="flex-1 flex flex-col overflow-hidden space-y-4">
-                    {/* Invoice header info */}
-                    <div className="bg-panel border border-main p-4 rounded-2xl space-y-1.5">
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-muted">رقم الفاتورة:</span>
-                        <span className="font-mono font-black text-main text-sm">{selectedInvoice.invoice_number}</span>
-                      </div>
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-muted">تاريخ البيع:</span>
-                        <span className="font-mono text-main">{new Date(selectedInvoice.created_at).toLocaleString('ar-EG')}</span>
-                      </div>
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-muted">العميل:</span>
-                        <span className="font-bold text-main">{selectedInvoice.customer_name || 'عميل نقدي'}</span>
-                      </div>
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-muted">طريقة الدفع:</span>
-                        <span className="font-bold text-blue-500">
-                          {selectedInvoice.payment_method === 'CARD' ? 'فودافون كاش' : selectedInvoice.payment_method === 'DEBT' ? 'آجل (دين)' : 'كاش نقدي'}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Invoice items list */}
-                    <div className="flex-1 overflow-y-auto border border-main rounded-2xl bg-main">
-                      <table className="w-full text-right text-xs">
-                        <thead>
-                          <tr className="bg-panel-accent text-muted border-b border-main font-bold">
-                            <th className="py-2.5 px-3">اسم القطعة (المنشأ)</th>
-                            <th className="py-2.5 px-3 text-center">الكمية</th>
-                            <th className="py-2.5 px-3 text-left">الإجمالي</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-main text-main font-semibold">
-                          {selectedInvoiceItems.map((item: any) => (
-                            <tr key={item.id} className="hover:bg-panel-hover/40">
-                              <td className="py-2.5 px-3">
-                                <div>{item.name}</div>
-                                <div className="text-[9px] text-muted font-normal">{item.origin}</div>
+                {/* Table list */}
+                <div className="flex-1 overflow-y-auto border border-main rounded-2xl bg-main">
+                  <table className="w-full text-right text-xs">
+                    <thead className="bg-panel-accent border-b border-main text-muted font-bold sticky top-0 z-10">
+                      <tr>
+                        <th className="py-2.5 px-3">رقم الفاتورة</th>
+                        <th className="py-2.5 px-3">اسم القطعة والمنشأ</th>
+                        <th className="py-2.5 px-3 text-center">الكمية المرتجعة</th>
+                        <th className="py-2.5 px-3 text-left">المبلغ المسترد</th>
+                        <th className="py-2.5 px-3 text-center">الكاشير</th>
+                        <th className="py-2.5 px-3 text-center">تاريخ المرتجع</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-main text-main font-semibold">
+                      {refundLogs.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="py-12 text-center text-slate-500 font-bold">لا توجد حركات مرتجعة مسجلة في النظام حالياً.</td>
+                        </tr>
+                      ) : (
+                        refundLogs
+                          .filter(log => !searchRefundQuery || (log.name || '').toLowerCase().includes(searchRefundQuery.toLowerCase()) || (log.invoice_number || '').toLowerCase().includes(searchRefundQuery.toLowerCase()))
+                          .map((log) => (
+                            <tr key={log.id} className="hover:bg-panel-hover/30">
+                              <td className="py-3 px-3 font-mono text-blue-500 font-bold">{log.invoice_number}</td>
+                              <td className="py-3 px-3">
+                                <div>{log.name}</div>
+                                <div className="text-[9px] text-muted font-normal">{log.origin}</div>
                               </td>
-                              <td className="py-2.5 px-3 text-center text-blue-500 font-bold font-mono">{item.quantity}</td>
-                              <td className="py-2.5 px-3 text-left text-emerald-500 font-bold font-mono">{Number(item.total_price).toLocaleString()} ج.م</td>
+                              <td className="py-3 px-3 text-center font-mono font-bold text-rose-500">
+                                {log.quantity}
+                              </td>
+                              <td className="py-3 px-3 text-left font-black font-mono text-rose-500">
+                                {log.refund_amount.toLocaleString()} ج.م
+                              </td>
+                              <td className="py-3 px-3 text-center text-muted text-[10px]">
+                                {log.cashier_name}
+                              </td>
+                              <td className="py-3 px-3 text-center text-muted text-[10px] font-mono">
+                                {new Date(log.created_at).toLocaleString('ar-EG')}
+                              </td>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-
-                    {/* Totals panel */}
-                    <div className="bg-panel border border-main p-4 rounded-2xl space-y-2 text-xs font-mono font-semibold">
-                      <div className="flex justify-between">
-                        <span className="text-muted">الإجمالي الفرعي:</span>
-                        <span className="text-main">{(Number(selectedInvoice.total_amount) || 0).toLocaleString()} ج.م</span>
-                      </div>
-                      <div className="flex justify-between text-rose-500 font-bold">
-                        <span>الخصم المطبق:</span>
-                        <span>-{(Number(selectedInvoice.discount) || 0).toLocaleString()} ج.م</span>
-                      </div>
-                      <div className="flex justify-between text-sm font-black text-emerald-600 dark:text-emerald-400 border-t border-dashed border-main pt-2">
-                        <span>الصافي النهائي:</span>
-                        <span>{Number(selectedInvoice.final_amount).toLocaleString()} ج.م</span>
-                      </div>
-                    </div>
-
-                    {/* Action buttons: Edit Discount & Reprint & Delete */}
-                    <div className="grid grid-cols-2 gap-2 mt-1">
-                      <button
-                        onClick={handleOpenEditDiscount}
-                        className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95 shadow-md"
-                      >
-                        <Percent className="w-4 h-4" />
-                        تعديل الخصم بعد التسليم
-                      </button>
-
-                      <button
-                        onClick={handleReprintReceipt}
-                        className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95 shadow-md"
-                      >
-                        <Printer className="w-4 h-4" />
-                        إعادة طباعة الفاتورة
-                      </button>
-                    </div>
-
-                    <button
-                      onClick={() => handleDeleteInvoice(selectedInvoice.id)}
-                      className="w-full bg-rose-500/10 hover:bg-rose-500 text-rose-500 hover:text-white border border-rose-500/20 font-bold py-2 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95 mt-1"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      حذف وإلغاء هذه الفاتورة نهائياً وإرجاع البضاعة
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex-1 flex flex-col items-center justify-center text-slate-500 text-center space-y-2">
-                    <Activity className="w-12 h-12 text-slate-400 animate-pulse" />
-                    <p className="text-xs font-bold">يرجى تحديد فاتورة من القائمة الجانبية لعرض بنودها وتفاصيلها وتعديل خصمها.</p>
-                  </div>
-                )}
-              </div>
-
-            </div>
-
-          </div>
-        </div>
-      )}
-
-      {/* Edit Discount Modal */}
-      {editDiscountModal && selectedInvoice && (
-        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in text-main">
-          <div className="bg-panel border border-main rounded-3xl p-6 w-full max-w-md space-y-4 shadow-2xl">
-            <div className="flex justify-between items-center border-b border-main pb-3">
-              <div>
-                <h3 className="text-base font-extrabold text-main">تعديل الخصم على الفاتورة</h3>
-                <p className="text-[11px] text-muted">فاتورة رقم: {selectedInvoice.invoice_number}</p>
-              </div>
-              <button
-                onClick={() => setEditDiscountModal(false)}
-                className="text-muted hover:text-main p-1.5 rounded-lg bg-main"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-3 text-xs">
-              <div className="bg-main border border-main p-3 rounded-xl flex justify-between items-center">
-                <span className="text-muted font-bold">إجمالي الفاتورة قبل الخصم:</span>
-                <span className="font-mono font-black text-sm text-main">{Number(selectedInvoice.total_amount).toLocaleString()} ج.م</span>
-              </div>
-
-              <div className="bg-main border border-main p-3 rounded-xl flex justify-between items-center">
-                <span className="text-muted font-bold">الخصم الحالي المسجل:</span>
-                <span className="font-mono font-bold text-rose-500">{Number(selectedInvoice.discount || 0).toLocaleString()} ج.م</span>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-main mb-1">
-                  قيمة الخصم الجديدة (ج.م):
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  max={selectedInvoice.total_amount}
-                  value={newDiscountValue}
-                  onChange={(e) => setNewDiscountValue(Math.max(0, Number(e.target.value)))}
-                  className="w-full bg-input-field border border-main text-main font-mono font-black text-lg py-2 px-3 rounded-xl text-center focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-muted mb-1">
-                  سبب تعديل الخصم (اختياري للتوثيق):
-                </label>
-                <input
-                  type="text"
-                  placeholder="مثال: اتفاق مع العميل بعد الفاتورة، خصم خاص..."
-                  value={discountReason}
-                  onChange={(e) => setDiscountReason(e.target.value)}
-                  className="w-full bg-input-field border border-main text-main text-xs py-2 px-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-
-              {/* Dynamic preview of new final amount */}
-              <div className="bg-emerald-500/10 border border-emerald-500/30 p-3.5 rounded-2xl flex justify-between items-center">
-                <div>
-                  <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">الصافي الجديد بعد التعديل:</span>
-                  <p className="text-[10px] text-muted">المبلغ المطلوب تحصيله من العميل</p>
+                          ))
+                      )}
+                    </tbody>
+                  </table>
                 </div>
-                <span className="font-mono font-black text-lg text-emerald-600 dark:text-emerald-400">
-                  {Math.max(0, Number(selectedInvoice.total_amount) - newDiscountValue).toLocaleString()} ج.م
-                </span>
+
               </div>
-            </div>
+            )}
 
-            <div className="flex gap-2 pt-2">
-              <button
-                onClick={handleSaveDiscount}
-                className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-bold py-2.5 rounded-xl text-xs transition-all active:scale-95 shadow-md flex items-center justify-center gap-1.5"
-              >
-                <CheckCircle2 className="w-4 h-4" />
-                حفظ وتطبيق الخصم
-              </button>
-              <button
-                onClick={() => setEditDiscountModal(false)}
-                className="bg-main hover:bg-panel-hover text-muted border border-main font-bold py-2.5 px-4 rounded-xl text-xs transition-all active:scale-95"
-              >
-                إلغاء
-              </button>
-            </div>
           </div>
         </div>
       )}
 
-      {/* Confirm Modal Overlay */}
-      {confirmConfig && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in text-main">
-          <div className="bg-panel border border-main rounded-3xl p-6 w-full max-w-sm space-y-4 text-center shadow-2xl">
-            <div className="text-lg font-bold text-main">تأكيد الإجراء</div>
-            <p className="text-xs text-muted leading-relaxed">{confirmConfig.message}</p>
-            <div className="flex gap-3 pt-2">
-              <button
-                onClick={() => {
-                  confirmConfig.onConfirm();
-                  setConfirmConfig(null);
-                }}
-                className="flex-1 bg-rose-600 hover:bg-rose-500 text-white font-bold py-2.5 rounded-xl text-xs transition-all active:scale-95 shadow-md"
-              >
-                تأكيد ومتابعة
-              </button>
-              <button
-                onClick={() => setConfirmConfig(null)}
-                className="flex-1 bg-main hover:bg-panel-hover text-muted border border-main font-bold py-2.5 rounded-xl text-xs transition-all active:scale-95"
-              >
-                إلغاء
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Alert Modal Overlay */}
+      {/* Custom Reusable React Alert Modal Overlay */}
       {alertConfig && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
           <div className="bg-panel border border-main rounded-3xl p-6 w-full max-w-sm space-y-4 text-center shadow-2xl text-main">
-            <div className="text-lg font-bold">إشعار</div>
+            <div className={`text-lg font-bold ${alertConfig.type === 'error' ? 'text-rose-500' : alertConfig.type === 'warning' ? 'text-amber-500' : 'text-emerald-500'}`}>
+              {alertConfig.type === 'error' ? '❌ خطأ' : alertConfig.type === 'warning' ? '⚠️ تحذير' : '✅ نجاح'}
+            </div>
             <p className="text-xs text-muted leading-relaxed">{alertConfig.message}</p>
             <button
               onClick={() => setAlertConfig(null)}
@@ -1458,6 +1634,140 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
             >
               موافق / إغلاق
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Refund Confirmation Modal */}
+      {refundConfirmConfig && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-[60] animate-fade-in">
+          <div className="bg-panel border border-rose-500/40 rounded-3xl p-6 w-full max-w-md space-y-5 shadow-2xl text-main">
+            <div className="text-center space-y-2">
+              <div className="text-3xl">↩️</div>
+              <h4 className="font-extrabold text-base text-rose-400">{refundConfirmConfig.title}</h4>
+              <p className="text-xs text-muted leading-relaxed">{refundConfirmConfig.message}</p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => setRefundConfirmConfig(null)}
+                disabled={refundLoading}
+                className="py-2.5 rounded-xl bg-panel-accent border border-main text-muted hover:text-main text-xs font-bold transition-all active:scale-95 disabled:opacity-50"
+              >
+                إلغاء
+              </button>
+              <button
+                onClick={() => refundConfirmConfig.onConfirm()}
+                disabled={refundLoading}
+                className="py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition-all active:scale-95 shadow-md disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {refundLoading ? (
+                  <><span className="animate-spin inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full"></span> جاري التنفيذ...</>
+                ) : (
+                  '✅ نعم، تأكيد المرتجع'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Invoice Discount Edit Modal */}
+      {discountModalOpen && selectedInvoice && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-[70] animate-fade-in">
+          <div className="bg-panel border border-main rounded-3xl p-6 w-full max-w-md space-y-5 shadow-2xl text-main font-sans">
+            <div className="flex justify-between items-center border-b border-main pb-3">
+              <h4 className="font-extrabold text-base flex items-center gap-2">
+                <span className="text-xl">🏷️</span> تعديل خصم الفاتورة بعد التسليم
+              </h4>
+              <button
+                onClick={() => setDiscountModalOpen(false)}
+                className="text-muted hover:text-main text-lg font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="bg-panel-accent border border-main p-3.5 rounded-2xl space-y-2 text-xs">
+              <div className="flex justify-between">
+                <span className="text-muted">رقم الفاتورة:</span>
+                <span className="font-mono font-bold text-main">{selectedInvoice.invoice_number}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted">العميل:</span>
+                <span className="font-bold text-main">{selectedInvoice.customer_name || 'عميل نقدي'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted">طريقة الدفع:</span>
+                <span className="font-bold text-blue-500">
+                  {selectedInvoice.payment_method === 'CARD' ? 'فودافون كاش' : selectedInvoice.payment_method === 'DEBT' ? 'آجل / دين' : 'كاش نقدي'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted">إجمالي الفاتورة الأصلي:</span>
+                <span className="font-mono font-bold text-blue-500">{(selectedInvoice.total_amount || 0).toLocaleString()} ج.م</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted">الخصم المطبق حالياً:</span>
+                <span className="font-mono font-bold text-rose-500">{(selectedInvoice.discount || 0).toLocaleString()} ج.م</span>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-muted block">
+                قيمة الخصم الجديد المراد تطبيقه (ج.م):
+              </label>
+              <div className="relative">
+                <input
+                  type="number"
+                  min={0}
+                  max={selectedInvoice.total_amount}
+                  value={discountVal}
+                  onChange={(e) => setDiscountVal(Math.max(0, Number(e.target.value) || 0))}
+                  className="w-full bg-input-field border border-main rounded-xl py-2.5 px-4 text-left font-mono font-black text-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  placeholder="0"
+                />
+                <span className="absolute right-3 top-3 text-xs text-muted font-bold pointer-events-none">ج.م</span>
+              </div>
+              <p className="text-[10px] text-muted">
+                الحد الأقصى للخصم هو إجمالي الفاتورة ({(selectedInvoice.total_amount || 0).toLocaleString()} ج.م).
+              </p>
+            </div>
+
+            {/* Live Preview of New Net Amount */}
+            <div className="bg-emerald-500/10 border border-emerald-500/20 p-3.5 rounded-2xl flex justify-between items-center text-xs">
+              <span className="font-bold text-emerald-600 dark:text-emerald-400">الصافي الجديد بعد الخصم:</span>
+              <span className="font-mono font-black text-lg text-emerald-600 dark:text-emerald-400">
+                {Math.max(0, (selectedInvoice.total_amount || 0) - (Number(discountVal) || 0)).toLocaleString()} ج.م
+              </span>
+            </div>
+
+            {selectedInvoice.payment_method === 'DEBT' && (
+              <div className="bg-amber-500/10 border border-amber-500/20 p-3 rounded-xl text-[11px] text-amber-500 flex items-center gap-2">
+                <span>ℹ️</span>
+                <span>هذه الفاتورة آجل على حساب عميل. سيتم تعديل مديونية العميل تلقائياً بمقدار فرق الخصم.</span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-3 pt-1">
+              <button
+                onClick={() => setDiscountModalOpen(false)}
+                disabled={discountSaving}
+                className="py-2.5 rounded-xl bg-panel-accent border border-main text-muted hover:text-main text-xs font-bold transition-all active:scale-95 disabled:opacity-50"
+              >
+                إلغاء
+              </button>
+              <button
+                onClick={handleSaveDiscount}
+                disabled={discountSaving}
+                className="py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition-all active:scale-95 shadow-md disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {discountSaving ? (
+                  <><span className="animate-spin inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full"></span> جاري الحفظ...</>
+                ) : (
+                  '💾 حفظ وتطبيق الخصم'
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

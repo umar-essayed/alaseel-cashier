@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, net } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, net, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -7,61 +7,52 @@ const { PosPrinter } = require('electron-pos-printer');
 
 let printServerProc = null;
 
-// Starts background Python Print Server for raw ESC/POS and TSPL graphics printing
+// No-op since we now use native PowerShell direct raw printing (no Python dependency)
 function startPrintServer() {
-  const serverPath = app.isPackaged 
-    ? path.join(process.resourcesPath, 'app/print_server.py') 
-    : path.join(__dirname, '../print_server.py');
+  console.log('[Print Server] Using native PowerShell spooler engine (no Python server required).');
+}
 
-  // Search for portable python binary
-  let pythonCmd = 'python3';
-  if (process.platform === 'win32') {
-    pythonCmd = 'python';
-    const possiblePythonPaths = [
-      path.join(process.resourcesPath, 'python/python.exe'),
-      path.join(process.resourcesPath, 'app/bin/python/python.exe'),
-      path.join(__dirname, '../python/python.exe'),
-      path.join(__dirname, '../bin/python/python.exe')
-    ];
-    for (const p of possiblePythonPaths) {
-      if (fs.existsSync(p)) {
-        pythonCmd = p;
-        break;
-      }
-    }
-  } else {
-    // On Linux/macOS, check if python3 exists, if not use python
-    const possiblePythonPaths = [
-      path.join(process.resourcesPath, 'python/bin/python3'),
-      path.join(__dirname, '../python/bin/python3')
-    ];
-    for (const p of possiblePythonPaths) {
-      if (fs.existsSync(p)) {
-        pythonCmd = p;
-        break;
-      }
-    }
-  }
+// Helper to write raw bytes to a named Windows printer via native PowerShell script
+function printRawBufferViaPowershell(resolvedPrinter, buffer) {
+  return new Promise((resolve, reject) => {
+    try {
+      const tempFilePath = path.join(app.getPath('temp'), `print_job_${Date.now()}_${Math.floor(Math.random() * 1000)}.bin`);
+      fs.writeFileSync(tempFilePath, buffer);
 
-  console.log(`[Print Server] Starting print server using: ${pythonCmd} on ${serverPath}`);
-  
-  printServerProc = spawn(pythonCmd, [serverPath, '5001']);
-  
-  printServerProc.stdout.on('data', (data) => {
-    console.log(`[Print Server STDOUT]: ${data.toString()}`);
-  });
-  
-  printServerProc.stderr.on('data', (data) => {
-    console.error(`[Print Server STDERR]: ${data.toString()}`);
-  });
-  
-  printServerProc.on('close', (code) => {
-    console.log(`[Print Server] process exited with code ${code}`);
+      const scriptPath = app.isPackaged
+        ? path.join(process.resourcesPath, 'print_raw.ps1')
+        : path.join(__dirname, '../print_raw.ps1');
+
+      const ps = spawn('powershell.exe', [
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', scriptPath,
+        '-PrinterName', resolvedPrinter,
+        '-FilePath', tempFilePath
+      ]);
+
+      let stdout = '';
+      let stderr = '';
+
+      ps.stdout.on('data', (data) => stdout += data.toString());
+      ps.stderr.on('data', (data) => stderr += data.toString());
+
+      ps.on('close', (code) => {
+        if (code === 0 && stdout.includes('Success')) {
+          resolve({ success: true });
+        } else {
+          const errorMsg = stderr || stdout || `Powershell process exited with code ${code}`;
+          reject(new Error(errorMsg));
+        }
+      });
+    } catch (err) {
+      reject(err);
+    }
   });
 }
 
-// Helper to render HTML to raw monochrome bitmap and send to Python Spooler
-async function printRawImageViaPython(htmlContent, type, printerName, widthMm, heightMm, widthPx, heightPx) {
+// Helper to render HTML to raw monochrome bitmap and send to Windows Spooler via PowerShell
+async function printRawImageViaPowershell(htmlContent, type, printerName, widthMm, heightMm, widthPx, heightPx) {
   return new Promise((resolve, reject) => {
     let offscreenWindow = new BrowserWindow({
       width: widthPx,
@@ -95,7 +86,7 @@ async function printRawImageViaPython(htmlContent, type, printerName, widthMm, h
         const h = size.height;
 
         const widthBytes = Math.ceil(w / 8);
-        const packed = Buffer.alloc(widthBytes * h);
+        const packed = Buffer.alloc(widthBytes * h, 255); // Initialize to 0xFF (all white / no ink)
 
         // Convert RGBA to 1-bit black/white
         for (let y = 0; y < h; y++) {
@@ -112,56 +103,38 @@ async function printRawImageViaPython(htmlContent, type, printerName, widthMm, h
             if (isBlack) {
               const byteIdx = y * widthBytes + Math.floor(x / 8);
               const bitIdx = x % 8;
-              packed[byteIdx] |= (1 << (7 - bitIdx));
+              packed[byteIdx] &= ~(1 << (7 - bitIdx)); // Clear the bit to 0 (black ink)
             }
           }
         }
 
-        // Post to Python print server
-        const request = net.request({
-          method: 'POST',
-          protocol: 'http:',
-          hostname: '127.0.0.1',
-          port: 5001,
-          path: '/'
-        });
+        // Construct raw printer buffer depending on type
+        let payload;
+        if (type === 'escpos') {
+          const xL = widthBytes % 256;
+          const xH = Math.floor(widthBytes / 256);
+          const yL = h % 256;
+          const yH = Math.floor(h / 256);
 
-        const postData = JSON.stringify({
-          printer_name: printerName,
-          type: type, // 'escpos' or 'tspl'
-          width_bytes: widthBytes,
-          height_pixels: h,
-          width_mm: widthMm,
-          height_mm: heightMm,
-          data_base64: packed.toString('base64')
-        });
+          const header = Buffer.from([29, 118, 48, 0, xL, xH, yL, yH]);
+          const cut = Buffer.from([29, 86, 66, 0]);
+          payload = Buffer.concat([header, packed, cut]);
+        } else if (type === 'tspl') {
+          const header = Buffer.from(`SIZE ${widthMm} mm, ${heightMm} mm\r\nGAP 2 mm, 0 mm\r\nDIRECTION 1\r\nCLS\r\nBITMAP 0,0,${widthBytes},${h},0,`);
+          const footer = Buffer.from(`\r\nPRINT 1,1\r\n`);
+          payload = Buffer.concat([header, packed, footer]);
+        } else {
+          payload = packed;
+        }
 
-        request.on('response', (response) => {
-          let responseBody = '';
-          response.on('data', (chunk) => {
-            responseBody += chunk.toString();
-          });
-          response.on('end', () => {
-            try {
-              const res = JSON.parse(responseBody);
-              if (res.success) {
-                resolve({ success: true });
-              } else {
-                reject(new Error(res.error || 'Unknown print error'));
-              }
-            } catch (e) {
-              reject(e);
-            }
-          });
-        });
+        // Resolve printer name
+        let resolvedPrinter = printerName;
+        if (!resolvedPrinter) {
+          resolvedPrinter = await autoDetectLabelPrinter();
+        }
 
-        request.on('error', (err) => {
-          reject(new Error(`Failed to connect to Python Print Server: ${err.message}`));
-        });
-
-        request.setHeader('Content-Type', 'application/json');
-        request.write(postData);
-        request.end();
+        const printResult = await printRawBufferViaPowershell(resolvedPrinter, payload);
+        resolve(printResult);
 
       } catch (err) {
         reject(err);
@@ -269,6 +242,21 @@ ipcMain.handle('checkout', async (event, saleData) => {
   return handlers.checkout(saleData);
 });
 
+ipcMain.handle('refund-sale-item', async (event, data) => {
+  const { saleItemId, refundQty, cashierName } = data;
+  return handlers.refundSaleItem(saleItemId, refundQty, cashierName);
+});
+
+ipcMain.handle('refund-whole-sale', async (event, data) => {
+  const { saleId, cashierName } = data;
+  return handlers.refundWholeSale(saleId, cashierName);
+});
+
+ipcMain.handle('update-invoice-discount', async (event, data) => {
+  const { saleId, newDiscount, cashierName } = data;
+  return handlers.updateInvoiceDiscount(saleId, newDiscount, cashierName);
+});
+
 ipcMain.handle('add-supplier-debt', async (event, data) => {
   const { supplierId, type, amount, notes, userId, username } = data;
   return handlers.addSupplierDebtTransaction(supplierId, type, amount, notes, userId, username);
@@ -289,6 +277,102 @@ ipcMain.handle('add-product', async (event, data) => {
   return handlers.addProduct(productData, userId, username);
 });
 
+// Credit Customers
+ipcMain.handle('get-credit-customers', async () => {
+  return handlers.getCreditCustomers();
+});
+ipcMain.handle('save-credit-customer', async (event, data) => {
+  return handlers.saveCreditCustomer(data);
+});
+ipcMain.handle('delete-credit-customer', async (event, customerId) => {
+  return handlers.deleteCreditCustomer(customerId);
+});
+ipcMain.handle('add-customer-payment', async (event, data) => {
+  const { customerId, amount, notes, cashierName } = data;
+  return handlers.addCustomerPayment(customerId, amount, notes, cashierName);
+});
+ipcMain.handle('get-customer-details', async (event, customerId) => {
+  return handlers.getCustomerDetails(customerId);
+});
+ipcMain.handle('update-customer-debt', async (event, data) => {
+  const { customerId, additionalAmount } = data;
+  return handlers.updateCustomerDebt(customerId, additionalAmount);
+});
+ipcMain.handle('get-refund-logs', async () => {
+  return handlers.getRefundLogs();
+});
+
+// Delete Product & Variant
+ipcMain.handle('delete-product', async (event, productId) => {
+  return handlers.deleteProduct(productId);
+});
+ipcMain.handle('delete-variant', async (event, variantId) => {
+  return handlers.deleteVariant(variantId);
+});
+
+// Delete Supplier
+ipcMain.handle('delete-supplier', async (event, supplierId) => {
+  return handlers.deleteSupplier(supplierId);
+});
+
+// Reset Database (with automatic backup to Desktop first)
+ipcMain.handle('reset-all-invoices', async (event, cashierName) => {
+  try {
+    const desktopDir = app.getPath('desktop');
+    const dbModule = require('./db');
+    const isFallback = dbModule.isFallback;
+    const ext = isFallback ? 'json' : 'sqlite';
+    const backupFilename = `الأصيل_نسخة_تلقائية_قبل_التصفير_${Date.now()}.${ext}`;
+    const autoSavePath = path.join(desktopDir, backupFilename);
+    
+    // Copy current DB to Desktop for safety
+    const activePath = isFallback ? path.join(path.dirname(dbModule.dbPath), 'fallback_db.json') : dbModule.dbPath;
+    if (fs.existsSync(activePath)) {
+      fs.copyFileSync(activePath, autoSavePath);
+    }
+    
+    // Perform database reset
+    const result = handlers.resetAllInvoices(cashierName);
+    return { success: true, savedPath: autoSavePath };
+  } catch (err) {
+    console.error('Reset database failed:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+// Download full backup manually
+ipcMain.handle('download-db-backup', async () => {
+  try {
+    const dbModule = require('./db');
+    const isFallback = dbModule.isFallback;
+    const dbPath = dbModule.dbPath;
+    const activePath = isFallback ? path.join(path.dirname(dbPath), 'fallback_db.json') : dbPath;
+    
+    if (!fs.existsSync(activePath)) {
+      return { success: false, error: 'Database file not found on disk.' };
+    }
+    
+    const defaultFilename = isFallback ? `fallback_db_backup_${Date.now()}.json` : `database_backup_${Date.now()}.sqlite`;
+    
+    const result = dialog.showSaveDialogSync(mainWindow, {
+      title: 'حفظ نسخة احتياطية من قاعدة البيانات',
+      defaultPath: path.join(app.getPath('downloads'), defaultFilename),
+      filters: [
+        { name: isFallback ? 'JSON Database' : 'SQLite Database', extensions: [isFallback ? 'json' : 'sqlite'] }
+      ]
+    });
+    
+    if (!result) return { success: false, error: 'CANCELED' };
+    
+    fs.copyFileSync(activePath, result);
+    return { success: true, savedPath: result };
+  } catch (e) {
+    console.error('Failed to export backup:', e);
+    return { success: false, error: e.message || 'Unknown export error.' };
+  }
+});
+
+
 ipcMain.handle('open-print-logs-folder', async () => {
   try {
     shell.openPath(printLogsDir);
@@ -305,31 +389,6 @@ ipcMain.handle('save-user', async (event, userData) => {
 
 ipcMain.handle('delete-user', async (event, userId) => {
   return handlers.deleteUser(userId);
-});
-
-ipcMain.handle('delete-variant', async (event, data) => {
-  const { variantId, userId, username } = data;
-  return handlers.deleteVariant(variantId, userId, username);
-});
-
-ipcMain.handle('delete-supplier', async (event, data) => {
-  const { supplierId, userId, username } = data;
-  return handlers.deleteSupplier(supplierId, userId, username);
-});
-
-ipcMain.handle('delete-sale', async (event, data) => {
-  const { saleId, userId, username } = data;
-  return handlers.deleteSale(saleId, userId, username);
-});
-
-ipcMain.handle('update-sale-discount', async (event, data) => {
-  const { saleId, newDiscount, userId, username, reason } = data;
-  return handlers.updateSaleDiscount(saleId, newDiscount, userId, username, reason);
-});
-
-ipcMain.handle('reset-all-invoices-and-accounts', async (event, data) => {
-  const { userId, username } = data;
-  return handlers.resetAllInvoicesAndAccounts(userId, username);
 });
 
 ipcMain.handle('get-system-printers', async () => {
@@ -662,13 +721,13 @@ ipcMain.handle('print-receipt', async (event, receiptData) => {
   // Capture offscreen PNG image simulation replica instead of HTML file
   savePrintReplicaAsImage(htmlContent, `invoice_${receiptData.invoiceNumber}.png`);
 
-  // Direct print via local Python Print Server
+  // Direct print via native PowerShell direct print engine
   const widthPx = paperWidth === '58mm' ? 384 : 576;
   const widthMm = paperWidth === '58mm' ? 58 : 80;
   
-  printRawImageViaPython(htmlContent, 'escpos', printerName, widthMm, 0, widthPx, 0)
-    .then(() => console.log('Python ESC/POS print job sent.'))
-    .catch((err) => console.error('Python ESC/POS print failed:', err));
+  printRawImageViaPowershell(htmlContent, 'escpos', printerName, widthMm, 0, widthPx, 0)
+    .then(() => console.log('PowerShell ESC/POS print job sent.'))
+    .catch((err) => console.error('PowerShell ESC/POS print failed:', err));
 
   return { success: true };
 });
@@ -876,10 +935,10 @@ ipcMain.handle('print-report', async (event, reportData) => {
   const reportFilename = `report_${fromDate.replace(/\//g, '-')}_to_${toDate.replace(/\//g, '-')}.png`;
   savePrintReplicaAsImage(htmlContent, reportFilename);
 
-  // Direct print via local Python Print Server (always 80mm for reports)
-  printRawImageViaPython(htmlContent, 'escpos', printerName, 80, 0, 576, 0)
-    .then(() => console.log('Python ESC/POS report print job sent.'))
-    .catch((err) => console.error('Python ESC/POS report print failed:', err));
+  // Direct print via native PowerShell direct print engine (always 80mm for reports)
+  printRawImageViaPowershell(htmlContent, 'escpos', printerName, 80, 0, 576, 0)
+    .then(() => console.log('PowerShell ESC/POS report print job sent.'))
+    .catch((err) => console.error('PowerShell ESC/POS report print failed:', err));
 
   return { success: true };
 });
@@ -890,20 +949,38 @@ const getBarcodeSettingsPath = () => path.join(app.getPath('userData'), 'barcode
 const getBarcodeConfigHelper = () => {
   const cfgPath = getBarcodeSettingsPath();
   const defaults = {
+    widthMm: 42.5,
+    heightMm: 25,
+    gap: 1.0,
+    marginTop: 0.6,
+    marginBottom: 0.5,
+    marginLeft: 0.4,
+    marginRight: 0.5,
+    barcodeX: 9.7,
+    barcodeY: 11.1,
+    scaleWidth: 2,
+    scaleHeight: 49,
+    showText: true,
+    storeFontSize: 22,
+    nameFontSize: 20,
+    originFontSize: 16,
+    priceFontSize: 23,
+    storeY: 5.4,
+    nameY: 9.2,
+    originY: 23.1,
+    priceY: 20.3,
     widthIn: 2.28,
     heightIn: 1.18,
-    widthMm: 58,
-    heightMm: 30,
-    marginTop: 0.5,
-    marginBottom: 0.5,
-    marginLeft: 0.5,
-    marginRight: 0.5,
-    gap: 1.0,
-    scaleWidth: 1.5,
-    scaleHeight: 35,
     fontSize: 10,
-    originFontSize: 8,
-    showText: true
+    storeX: 20.6,
+    nameX: 20.7,
+    originX: 30.5,
+    priceX: 4.8,
+    showPrice: false,
+    showStoreName: true,
+    showProductName: true,
+    showBarcode: true,
+    showOrigin: true
   };
   try {
     if (fs.existsSync(cfgPath)) {
@@ -933,6 +1010,19 @@ ipcMain.handle('save-barcode-config', async (event, config) => {
     console.error('Failed to save barcode settings file:', err);
     return { success: false, error: err.message };
   }
+});
+
+// High-speed direct TSPL raw print handler using native PowerShell
+ipcMain.handle('print-raw-tspl', async (event, data) => {
+  const { printerName, base64Tspl } = data;
+  
+  let resolvedPrinter = printerName;
+  if (!resolvedPrinter) {
+    resolvedPrinter = await autoDetectLabelPrinter();
+  }
+  
+  const rawBuffer = Buffer.from(base64Tspl, 'base64');
+  return await printRawBufferViaPowershell(resolvedPrinter, rawBuffer);
 });
 
 // ── Direct Barcode Label Printer ─────────────────────────────────────────────
@@ -1099,10 +1189,10 @@ ipcMain.handle('print-barcodes', async (event, barcodeData) => {
 
     try {
       // Print this label using TSPL (standard label printer language)
-      await printRawImageViaPython(singleHtml, 'tspl', printerName, cfg.widthMm, cfg.heightMm, widthPx, heightPx);
-      console.log(`[Barcode] Label printed successfully via Python print server: ${lbl.barcode}`);
+      await printRawImageViaPowershell(singleHtml, 'tspl', printerName, cfg.widthMm, cfg.heightMm, widthPx, heightPx);
+      console.log(`[Barcode] Label printed successfully via PowerShell print engine: ${lbl.barcode}`);
     } catch (err) {
-      console.error(`[Barcode] Failed to print label via Python print server: ${lbl.barcode}`, err);
+      console.error(`[Barcode] Failed to print label via PowerShell print engine: ${lbl.barcode}`, err);
     }
   }
 

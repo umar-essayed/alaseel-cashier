@@ -95,95 +95,70 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   const [reportFrom, setReportFrom] = useState(getTodayISO());
   const [reportTo, setReportTo] = useState(getTodayISO());
   const [printingReport, setPrintingReport] = useState(false);
+  const [reportData, setReportData] = useState<{
+    fromDate: string;
+    toDate: string;
+    totalInvoices: number;
+    totalRevenue: number;
+    totalDiscounts: number;
+    totalCost: number;
+    totalProfit: number;
+    invoices: any[];
+    itemSummaries: any[];
+  } | null>(null);
 
   const [systemPrinters, setSystemPrinters] = useState<any[]>([]);
   const [selectedPrinter, setSelectedPrinter] = useState(storeSettings.selected_printer_name || '');
 
-  const [resetPassword, setResetPassword] = useState('');
-  const [showResetModal, setShowResetModal] = useState(false);
+  const [isBackingUp, setIsBackingUp] = useState(false);
+  const [lastBackupTime, setLastBackupTime] = useState<string | null>(localStorage.getItem('last_backup_time'));
+  
+  const [adminPasswordInput, setAdminPasswordInput] = useState('');
+  const [isResetting, setIsResetting] = useState(false);
 
-  const handleDownloadLocalBackup = async () => {
+  const handleDownloadBackup = async () => {
     try {
-      const res = await (window as any).api.getDbBackupFile();
-      if (res.success && res.data) {
-        const blob = new Blob([res.data], { type: 'application/octet-stream' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = res.filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        
-        // Log backup activity
-        await dbClient.logActivity(
-          currentUserId,
-          currentUsername,
-          'BACKUP_DOWNLOADED',
-          `تنزيل نسخة احتياطية محلية باسم: ${res.filename}`
-        );
-        showAlert('✅ تم تنزيل النسخة الاحتياطية بنجاح وحفظها على جهازك!', 'success');
-        return true;
-      } else {
-        showAlert(`فشل تنزيل النسخة الاحتياطية: ${res.error || 'خطأ غير معروف'}`, 'error');
-        return false;
+      const res = await (window as any).api.downloadDbBackup();
+      if (res.success) {
+        showAlert(`تم حفظ النسخة الاحتياطية بنجاح في:\n${res.savedPath}`, 'success');
+      } else if (res.error !== 'CANCELED') {
+        showAlert(`فشل تنزيل النسخة الاحتياطية: ${res.error}`, 'error');
       }
-    } catch (e: any) {
-      showAlert(`خطأ: ${e.message}`, 'error');
-      return false;
+    } catch (err: any) {
+      console.error(err);
+      showAlert(`حدث خطأ أثناء تنزيل النسخة الاحتياطية: ${err.message}`, 'error');
     }
   };
 
-  const executeSystemReset = async () => {
-    if (!resetPassword) {
-      showAlert('يرجى كتابة كلمة المرور للتأكيد!', 'error');
+  const handleResetDatabase = async () => {
+    if (!adminPasswordInput) {
+      showAlert('يرجى إدخال كلمة مرور الأدمن للتأكيد!', 'warning');
+      return;
+    }
+    const adminUser = users.find(u => u.role === 'ADMIN' && u.password_hash === adminPasswordInput);
+    if (!adminUser) {
+      showAlert('كلمة مرور الأدمن غير صحيحة أو ليس لديك صلاحيات كافية لتصفير النظام!', 'error');
       return;
     }
 
-    try {
-      const usersList = await dbClient.dbQuery('SELECT role, password_hash FROM cashier_users WHERE id = ?', [currentUserId]);
-      if (!usersList || usersList.length === 0) {
-        showAlert('المستخدم الحالي غير موجود بقاعدة البيانات!', 'error');
-        return;
+    showConfirm('تحذير شديد الخطورة: هل أنت متأكد من رغبتك في تصفير جميع الفواتير والحسابات في النظام بالكامل؟ (سيتم حفظ نسخة احتياطية على سطح المكتب أولاً تلقائياً)', async () => {
+      setIsResetting(true);
+      try {
+        const res = await (window as any).api.resetAllInvoices(adminUser.username);
+        if (res.success) {
+          setAdminPasswordInput('');
+          loadLogs();
+          showAlert(`✅ تم تصفير جميع الفواتير والحسابات والمديونيات بنجاح!\nتم حفظ نسخة احتياطية تلقائية من البيانات السابقة على سطح المكتب في المسار:\n${res.savedPath}`, 'success');
+        } else {
+          showAlert(`فشل عملية التصفير: ${res.error}`, 'error');
+        }
+      } catch (err: any) {
+        showAlert(`خطأ غير متوقع أثناء تصفير النظام: ${err.message}`, 'error');
+      } finally {
+        setIsResetting(false);
       }
-      
-      const user = usersList[0];
-      if (user.role !== 'ADMIN') {
-        showAlert('عذراً، هذا الإجراء يتطلب صلاحيات الأدمن!', 'error');
-        return;
-      }
-
-      if (resetPassword !== user.password_hash) {
-        showAlert('كلمة المرور غير صحيحة!', 'error');
-        return;
-      }
-
-      // Automatically download backup first
-      showAlert('جاري تنزيل نسخة احتياطية من النظام تلقائياً قبل التصفير...', 'warning');
-      const backupSuccess = await handleDownloadLocalBackup();
-      if (!backupSuccess) {
-        showAlert('فشلت عملية تنزيل النسخة الاحتياطية! تم إلغاء تصفير النظام للأمان.', 'error');
-        return;
-      }
-
-      const res = await dbClient.resetAllInvoicesAndAccounts(currentUserId, currentUsername);
-      if (res.success) {
-        showAlert('✅ تم تصفير جميع الفواتير وحسابات الموردين وتصفير الحسابات بنجاح!', 'success');
-        setShowResetModal(false);
-        setResetPassword('');
-        onSaveSettings(storeSettings);
-      } else {
-        showAlert('فشلت عملية تصفير النظام!', 'error');
-      }
-    } catch (e: any) {
-      console.error(e);
-      showAlert(`حدث خطأ أثناء التصفير: ${e.message}`, 'error');
-    }
+    });
   };
-
-  const [isBackingUp, setIsBackingUp] = useState(false);
-  const [lastBackupTime, setLastBackupTime] = useState<string | null>(localStorage.getItem('last_backup_time'));
 
   const handleManualBackup = async () => {
     const sUrl = supabaseUrl || storeSettings.supabase_url || '';
@@ -466,7 +441,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
 
       const itemSummaries = Object.values(groupedItemsMap).sort((a, b) => b.qty - a.qty);
 
-      const res = await dbClient.printReport({
+      setReportData({
         fromDate: reportFrom,
         toDate: reportTo,
         totalInvoices: filteredSales.length,
@@ -477,17 +452,6 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
         invoices: filteredSales,
         itemSummaries
       });
-
-      if (res.success) {
-        await dbClient.logActivity(
-          currentUserId,
-          currentUsername,
-          'REPORT_PRINTED',
-          `طباعة تقرير مبيعات الفترة من ${reportFrom} إلى ${reportTo} - صافي أرباح: ${totalProfit} ج.م`
-        );
-        showAlert('تم إرسال التقرير المالي الممتد للطابعة وحفظ نسخة محاكاة PNG بنجاح!', 'success');
-        loadLogs();
-      }
     } catch (err) {
       console.error(err);
       showAlert('خطأ أثناء سحب البيانات وتجهيز التقرير المالي.', 'error');
@@ -607,8 +571,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
               disabled={printingReport}
               className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 disabled:text-slate-500 text-white font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2 text-sm shadow-md active:scale-98"
             >
-              <Printer className="w-5 h-5" />
-              {printingReport ? 'جاري تجهيز وطباعة التقرير...' : 'طباعة تقرير مبيعات الفترة حرارياً'}
+              <FileText className="w-5 h-5" />
+              {printingReport ? 'جاري تجهيز التقرير المالي...' : 'عرض وتفصيل تقرير مبيعات الفترة'}
             </button>
           </div>
         </div>
@@ -671,49 +635,83 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
               </select>
             </div>
 
-            {/* Backup & Reset Sections */}
-            <div className="bg-blue-500/5 border border-blue-500/20 rounded-xl p-4 space-y-3 col-span-1 md:col-span-2">
-              <p className="text-xs font-black text-blue-500 flex items-center gap-1.5">💾 النسخ الاحتياطي وإدارة الملفات المحلية</p>
-              <div className="flex flex-col sm:flex-row gap-3">
+            {/* Receipt Paper Width Selector */}
+            <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4 space-y-3">
+              <p className="text-xs font-black text-amber-500 flex items-center gap-1.5">🧾 إعداد مقاس رول الورق الحراري للفواتير</p>
+              <div className="grid grid-cols-2 gap-3">
                 <button
                   type="button"
-                  onClick={handleDownloadLocalBackup}
-                  className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-4 rounded-xl text-xs transition-all active:scale-95 flex items-center justify-center gap-2"
+                  onClick={() => setReceiptPaperWidth('80mm')}
+                  className={`p-3 rounded-xl border-2 text-center transition-all ${receiptPaperWidth === '80mm' ? 'border-amber-500 bg-amber-500/10 text-amber-500' : 'border-main text-muted hover:border-amber-500/40'}`}
                 >
-                  <FolderOpen className="w-4 h-4" />
-                  تنزيل نسخة احتياطية من النظام بالكامل (.sqlite / .json)
+                  <div className="text-lg font-black">80 مم</div>
+                  <div className="text-[10px] font-bold mt-0.5">رول عريض (موصى به)</div>
                 </button>
                 <button
                   type="button"
-                  onClick={handleManualBackup}
-                  disabled={isBackingUp}
-                  className="flex-1 bg-indigo-650 hover:bg-indigo-600 text-white font-bold py-3 px-4 rounded-xl text-xs transition-all active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50"
+                  onClick={() => setReceiptPaperWidth('58mm')}
+                  className={`p-3 rounded-xl border-2 text-center transition-all ${receiptPaperWidth === '58mm' ? 'border-amber-500 bg-amber-500/10 text-amber-500' : 'border-main text-muted hover:border-amber-500/40'}`}
                 >
-                  <RefreshCw className="w-4 h-4" />
-                  {isBackingUp ? 'جاري الرفع للـ Cloud...' : 'رفع نسخة احتياطية سحابية لـ Supabase'}
+                  <div className="text-lg font-black">58 مم</div>
+                  <div className="text-[10px] font-bold mt-0.5">رول ضيق (اقتصادي)</div>
                 </button>
               </div>
-              <p className="text-[10px] text-muted leading-relaxed">
-                يُنصح بتنزيل نسخة احتياطية دورية وحفظها على جهاز الكمبيوتر أو قرص خارجي لضمان عدم فقدان البيانات تحت أي ظرف.
-              </p>
+              <p className="text-[10px] text-muted">المقاس الحالي: <strong className="text-amber-500">{receiptPaperWidth}</strong> — سيُطبق على جميع فواتير المبيعات والتقارير</p>
             </div>
 
-            <div className="bg-rose-500/5 border border-rose-500/20 rounded-xl p-4 space-y-3 col-span-1 md:col-span-2">
-              <p className="text-xs font-black text-rose-500 flex items-center gap-1.5">⚠️ تصفير قاعدة البيانات وإلغاء العمليات</p>
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-                <div className="text-right">
-                  <p className="text-xs font-bold text-main">مسح وتصفير كافة فواتير المبيعات والحسابات</p>
-                  <p className="text-[10px] text-muted mt-0.5">سيتم حذف الفواتير بالكامل وتصفير مديونيات الموردين وحسابات الأجل بعد تنزيل نسخة احتياطية تلقائياً.</p>
+            {/* Local Backup Section */}
+            <div className="bg-blue-600/5 border border-blue-500/20 rounded-xl p-4 space-y-3">
+              <p className="text-xs font-black text-blue-500 flex items-center gap-1.5 font-bold">
+                <FolderOpen className="w-4 h-4" />
+                📁 تنزيل نسخة احتياطية من النظام بالكامل (Local Backup)
+              </p>
+              <p className="text-[11px] text-muted leading-relaxed">
+                اضغط على الزر أدناه لتنزيل نسخة كاملة من قاعدة البيانات الخاصة بالنظام وتخزينها بأي مكان على جهازك بصيغة (JSON أو SQLite). يمكنك استخدام هذا الملف لاستعادة البيانات عند الحاجة.
+              </p>
+              <button
+                type="button"
+                onClick={handleDownloadBackup}
+                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2.5 rounded-xl transition-all flex items-center justify-center gap-1.5 text-xs shadow-sm"
+              >
+                <FolderOpen className="w-4 h-4" />
+                تنزيل نسخة احتياطية كاملة (.json / .sqlite)
+              </button>
+            </div>
+
+            {/* System Reset Section */}
+            <div className="bg-rose-600/5 border border-rose-500/20 rounded-xl p-4 space-y-3">
+              <p className="text-xs font-black text-rose-500 flex items-center gap-1.5 font-bold">
+                <ShieldAlert className="w-4 h-4 animate-pulse" />
+                ⚠️ تصفير وحذف جميع فواتير وحسابات النظام
+              </p>
+              <p className="text-[11px] text-muted leading-relaxed">
+                سيقوم هذا الإجراء بمسح وحذف **جميع الفواتير والمبيعات وحركات ديون الموردين ومدفوعات العملاء الأجل وسجل المرتجعات تماماً**.
+                قبل التصفير، **يقوم النظام تلقائياً بإنشاء نسخة احتياطية من بياناتك الحالية وحفظها على سطح المكتب**.
+              </p>
+              
+              <div className="space-y-2">
+                <label className="block text-[10px] text-rose-500 font-bold">تأكيد كلمة مرور الأدمن (ADMIN Password):</label>
+                <div className="relative">
+                  <KeyRound className="absolute right-2.5 top-2.5 w-4 h-4 text-muted" />
+                  <input
+                    type="password"
+                    placeholder="أدخل كلمة مرور الأدمن للتأكيد"
+                    className="w-full bg-input-field text-main rounded-xl py-2 pr-9 pl-3 text-right focus:outline-none focus:ring-2 focus:ring-rose-500 text-xs border border-rose-500/30 font-bold placeholder-slate-500"
+                    value={adminPasswordInput}
+                    onChange={(e) => setAdminPasswordInput(e.target.value)}
+                  />
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setShowResetModal(true)}
-                  className="bg-rose-600 hover:bg-rose-500 text-white font-bold py-2.5 px-5 rounded-xl text-xs transition-all active:scale-95 flex items-center gap-1.5 shadow-sm shrink-0"
-                >
-                  <ShieldAlert className="w-4.5 h-4.5" />
-                  تصفير الفواتير والحسابات
-                </button>
               </div>
+
+              <button
+                type="button"
+                onClick={handleResetDatabase}
+                disabled={isResetting}
+                className="w-full bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 disabled:text-slate-500 text-white font-bold py-2.5 rounded-xl transition-all flex items-center justify-center gap-1.5 text-xs shadow-sm"
+              >
+                <ShieldAlert className="w-4 h-4" />
+                {isResetting ? 'جاري تصفير قاعدة البيانات...' : 'تصفير فواتير وحسابات النظام نهائياً'}
+              </button>
             </div>
 
 
@@ -876,7 +874,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           {/* User List */}
           <div className="space-y-2">
             {users.map(user => {
-              const isProtected = user.username === 'admin' || user.username === 'احمد مجدي';
+              const isProtected = user.username === 'admin';
               return (
                 <div key={user.id} className="bg-panel-accent border border-main p-3 rounded-xl flex justify-between items-center text-xs">
                   <div>
@@ -1061,45 +1059,166 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
         </div>
       )}
 
-      {/* System Reset Password Modal */}
-      {showResetModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
-          <div className="bg-panel border border-main rounded-3xl p-6 w-full max-w-sm space-y-4 text-center shadow-2xl text-main">
-            <div className="text-lg font-bold text-rose-500">تأكيد تصفير النظام</div>
-            <p className="text-xs text-muted leading-relaxed">
-              تحذير: سيتم مسح جميع الفواتير والمبيعات وحركات ديون الموردين وتصفير الحسابات بالكامل. هذا الإجراء يتطلب صلاحيات الأدمن وكلمة المرور الخاصة بك.
-            </p>
-            <div>
-              <label className="block text-xs text-muted mb-1 text-right font-bold">كلمة المرور الخاصة بك للتأكيد *</label>
-              <input
-                type="password"
-                className="w-full bg-input-field text-main rounded-xl py-2.5 px-3 text-right focus:outline-none focus:ring-2 focus:ring-rose-500 border border-main text-sm"
-                placeholder="أدخل كلمة مرور الحساب الحالي"
-                value={resetPassword}
-                onChange={(e) => setResetPassword(e.target.value)}
-              />
+      {/* Sales Period Report Preview Modal */}
+      {reportData && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center p-6 z-40 animate-fade-in text-main">
+          <div className="bg-panel border border-main rounded-3xl w-full max-w-4xl h-[85vh] flex flex-col overflow-hidden shadow-2xl relative">
+            
+            {/* Modal Header */}
+            <div className="p-5 border-b border-main flex justify-between items-center bg-panel-accent shrink-0">
+              <div>
+                <h3 className="font-extrabold text-base text-main">تقرير المبيعات المالي للفترة</h3>
+                <p className="text-[10px] text-muted mt-0.5 font-mono">
+                  الفترة الزمنية المحددة: من {reportData.fromDate} إلى {reportData.toDate}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const res = await dbClient.printReport(reportData);
+                      if (res.success) {
+                        showAlert('تم إرسال التقرير المالي للطابعة وحفظ نسخة محاكاة PNG بنجاح!', 'success');
+                        await dbClient.logActivity(
+                          currentUserId,
+                          currentUsername,
+                          'REPORT_PRINTED',
+                          `طباعة تقرير مبيعات الفترة من ${reportData.fromDate} إلى ${reportData.toDate} - صافي أرباح: ${reportData.totalProfit} ج.م`
+                        );
+                        loadLogs();
+                      }
+                    } catch (err) {
+                      console.error(err);
+                      showAlert('خطأ أثناء إرسال التقرير للطابعة.', 'error');
+                    }
+                  }}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all active:scale-95 flex items-center gap-1.5 shadow-md"
+                >
+                  <Printer className="w-4 h-4" />
+                  طباعة حرارية
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReportData(null)}
+                  className="bg-main border border-main text-muted hover:text-main px-4 py-2 rounded-xl text-xs font-bold transition-all active:scale-95"
+                >
+                  إغلاق
+                </button>
+              </div>
             </div>
-            <div className="flex gap-3 pt-2">
-              <button
-                onClick={executeSystemReset}
-                className="flex-1 bg-rose-600 hover:bg-rose-500 text-white font-bold py-2.5 rounded-xl text-xs transition-all active:scale-95 shadow-md"
-              >
-                تأكيد وبدء التصفير
-              </button>
-              <button
-                onClick={() => {
-                  setShowResetModal(false);
-                  setResetPassword('');
-                }}
-                className="flex-1 bg-main hover:bg-panel-hover text-muted border border-main font-bold py-2.5 rounded-xl text-xs transition-all active:scale-95"
-              >
-                إلغاء
-              </button>
+
+            {/* Modal Content */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              
+              {/* Financial Metrics Summary Rows */}
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                <div className="bg-main border border-main p-4 rounded-2xl text-center">
+                  <div className="text-[10px] text-muted font-bold">عدد الفواتير</div>
+                  <div className="text-lg font-black text-main font-mono mt-1">{reportData.totalInvoices} فواتير</div>
+                </div>
+                <div className="bg-main border border-main p-4 rounded-2xl text-center border-r-4 border-r-blue-500">
+                  <div className="text-[10px] text-muted font-bold">إجمالي المبيعات</div>
+                  <div className="text-lg font-black text-blue-500 font-mono mt-1">{reportData.totalRevenue.toLocaleString()} ج.م</div>
+                </div>
+                <div className="bg-main border border-main p-4 rounded-2xl text-center">
+                  <div className="text-[10px] text-muted font-bold">الخصومات الممنوحة</div>
+                  <div className="text-lg font-black text-rose-500 font-mono mt-1">{reportData.totalDiscounts.toLocaleString()} ج.م</div>
+                </div>
+                <div className="bg-main border border-main p-4 rounded-2xl text-center">
+                  <div className="text-[10px] text-muted font-bold">تكلفة البضائع</div>
+                  <div className="text-lg font-black text-amber-500 font-mono mt-1">{reportData.totalCost.toLocaleString()} ج.م</div>
+                </div>
+                <div className="bg-main border border-main p-4 rounded-2xl text-center border-l-4 border-l-emerald-500">
+                  <div className="text-[10px] text-muted font-bold">صافي الأرباح</div>
+                  <div className="text-lg font-black text-emerald-500 font-mono mt-1">{reportData.totalProfit.toLocaleString()} ج.م</div>
+                </div>
+              </div>
+
+              {/* Top Selling Items Table */}
+              <div className="space-y-2">
+                <h4 className="text-xs font-black text-main flex items-center gap-1.5">
+                  <RefreshCw className="w-3.5 h-3.5 text-blue-500 animate-spin" style={{ animationDuration: '6s' }} />
+                  القطع الأكثر طلباً ومبيعاً في الفترة المحددة
+                </h4>
+                <div className="border border-main rounded-2xl overflow-hidden bg-main">
+                  <table className="w-full text-right text-xs">
+                    <thead className="bg-panel-accent text-muted border-b border-main font-bold">
+                      <tr>
+                        <th className="py-2.5 px-4">اسم قطعة الغيار</th>
+                        <th className="py-2.5 px-4 text-center">الكمية المباعة</th>
+                        <th className="py-2.5 px-4 text-left">إجمالي القيمة</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-main text-main font-semibold">
+                      {reportData.itemSummaries.length === 0 ? (
+                        <tr>
+                          <td colSpan={3} className="py-6 text-center text-slate-500">لا توجد حركات مبيعات أصناف في هذه الفترة.</td>
+                        </tr>
+                      ) : (
+                        reportData.itemSummaries.slice(0, 8).map((item: any, idx: number) => (
+                          <tr key={idx} className="hover:bg-panel-hover/30">
+                            <td className="py-2.5 px-4">{item.name} <span className="text-[9px] text-muted">({item.origin})</span></td>
+                            <td className="py-2.5 px-4 text-center text-blue-500 font-bold font-mono">{item.qty} قطع</td>
+                            <td className="py-2.5 px-4 text-left text-emerald-500 font-bold font-mono">{item.totalValue.toLocaleString()} ج.م</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Full Invoices List */}
+              <div className="space-y-2">
+                <h4 className="text-xs font-black text-main">
+                  قائمة فواتير الفترة التفصيلية
+                </h4>
+                <div className="border border-main rounded-2xl overflow-hidden bg-main">
+                  <table className="w-full text-right text-xs">
+                    <thead className="bg-panel-accent text-muted border-b border-main font-bold">
+                      <tr>
+                        <th className="py-2.5 px-4">رقم الفاتورة</th>
+                        <th className="py-2.5 px-4 text-center">التاريخ والوقت</th>
+                        <th className="py-2.5 px-4">العميل</th>
+                        <th className="py-2.5 px-4 text-center">طريقة الدفع</th>
+                        <th className="py-2.5 px-4 text-left">الصافي النهائي</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-main text-main font-semibold">
+                      {reportData.invoices.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="py-6 text-center text-slate-500">لا توجد فواتير صادرة في هذه الفترة.</td>
+                        </tr>
+                      ) : (
+                        reportData.invoices.map((inv: any, idx: number) => (
+                          <tr key={idx} className="hover:bg-panel-hover/30">
+                            <td className="py-2.5 px-4 font-mono font-bold text-blue-500">{inv.invoice_number}</td>
+                            <td className="py-2.5 px-4 text-center text-muted font-mono">{new Date(inv.created_at).toLocaleString('ar-EG')}</td>
+                            <td className="py-2.5 px-4">{inv.customer_name || 'نقدي'}</td>
+                            <td className="py-2.5 px-4 text-center">
+                              <span className={`px-2 py-0.5 rounded text-[9px] font-bold ${
+                                inv.payment_method === 'CARD' ? 'bg-rose-500/10 text-rose-500' :
+                                inv.payment_method === 'DEBT' ? 'bg-amber-500/10 text-amber-500' :
+                                'bg-emerald-500/10 text-emerald-500'
+                              }`}>
+                                {inv.payment_method === 'CARD' ? 'فودافون كاش' : inv.payment_method === 'DEBT' ? 'آجل' : 'كاش'}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-4 text-left font-bold text-main font-mono">{inv.final_amount.toLocaleString()} ج.م</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
             </div>
+
           </div>
         </div>
       )}
-
     </div>
   );
 };

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { LayoutGrid, ShoppingCart, Boxes, Users2, Settings, Wifi, WifiOff, AlertTriangle, User, LogOut, Sun, Moon, Tag } from 'lucide-react';
+import { LayoutGrid, ShoppingCart, Boxes, Users2, Settings, Wifi, WifiOff, AlertTriangle, User, LogOut, Sun, Moon, Tag, UserCheck } from 'lucide-react';
 import { dbClient } from './database/dbClient';
 import { createClient } from '@supabase/supabase-js';
 import { CashierScreen } from './components/CashierScreen';
@@ -9,9 +9,10 @@ import { SettingsScreen } from './components/SettingsScreen';
 import { DashboardScreen } from './components/DashboardScreen';
 import { LoginScreen } from './components/LoginScreen';
 import { BarcodePrintScreen } from './components/BarcodePrintScreen';
+import { CustomersScreen } from './components/CustomersScreen';
 import { CashierUser } from './types';
 
-type Tab = 'cashier' | 'inventory' | 'suppliers' | 'settings' | 'dashboard' | 'barcode';
+type Tab = 'cashier' | 'inventory' | 'suppliers' | 'settings' | 'dashboard' | 'barcode' | 'customers';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<CashierUser | null>(null);
@@ -240,34 +241,30 @@ export default function App() {
               const { error: delErr } = await supabase.from('cashier_users').delete().eq('id', payload.id);
               if (delErr) throw new Error(`cashier_users delete: ${delErr.message}`);
 
-            // ── PRODUCT VARIANTS DELETE ───────────────────────────────────────
-            } else if (item.table_name === 'product_variants_delete') {
-              const { error: delErr } = await supabase.from('product_variants').delete().eq('id', payload.id);
-              if (delErr) throw new Error(`product_variants delete: ${delErr.message}`);
-
-            // ── PRODUCTS DELETE ───────────────────────────────────────────────
+            // ── PRODUCTS DELETE ────────────────────────────────────────────────
             } else if (item.table_name === 'products_delete') {
               const { error: delErr } = await supabase.from('products').delete().eq('id', payload.id);
               if (delErr) throw new Error(`products delete: ${delErr.message}`);
 
-            // ── SUPPLIERS DELETE ──────────────────────────────────────────────
+            // ── PRODUCT VARIANTS DELETE ────────────────────────────────────────
+            } else if (item.table_name === 'product_variants_delete') {
+              const { error: delErr } = await supabase.from('product_variants').delete().eq('id', payload.id);
+              if (delErr) throw new Error(`product_variants delete: ${delErr.message}`);
+              
+              if (payload.deleteProduct) {
+                const { error: pDelErr } = await supabase.from('products').delete().eq('id', payload.product_id);
+                if (pDelErr) throw new Error(`product (associated) delete: ${pDelErr.message}`);
+              }
+
+            // ── SUPPLIERS DELETE ───────────────────────────────────────────────
             } else if (item.table_name === 'suppliers_delete') {
               const { error: delErr } = await supabase.from('suppliers').delete().eq('id', payload.id);
               if (delErr) throw new Error(`suppliers delete: ${delErr.message}`);
 
-            // ── SALES DELETE ──────────────────────────────────────────────────
-            } else if (item.table_name === 'sales_delete') {
-              const { error: delErr } = await supabase.from('sales').delete().eq('id', payload.id);
-              if (delErr) throw new Error(`sales delete: ${delErr.message}`);
-
-            // ── RESET ALL ─────────────────────────────────────────────────────
-            } else if (item.table_name === 'reset_all') {
-              const { error: err1 } = await supabase.from('sales').delete().neq('id', 'dummy');
-              const { error: err2 } = await supabase.from('supplier_debts').delete().neq('id', 'dummy');
-              const { error: err3 } = await supabase.from('suppliers').update({ current_debt: 0 }).neq('id', 'dummy');
-              if (err1 || err2 || err3) {
-                throw new Error(`reset_all error: ${err1?.message || err2?.message || err3?.message}`);
-              }
+            // ── CREDIT CUSTOMERS DELETE ────────────────────────────────────────
+            } else if (item.table_name === 'credit_customers_delete') {
+              const { error: delErr } = await supabase.from('credit_customers').delete().eq('id', payload.id);
+              if (delErr) throw new Error(`credit_customers delete: ${delErr.message}`);
 
             // ── ACTIVITY LOGS ──────────────────────────────────────────────────
             } else if (item.table_name === 'activity_logs') {
@@ -417,6 +414,14 @@ export default function App() {
             }}
           />
         );
+      case 'customers':
+        return (
+          <CustomersScreen
+            currentUserId={currentUser.id}
+            currentUsername={currentUser.username}
+            onRefreshData={refreshGlobalMetrics}
+          />
+        );
       case 'dashboard':
         return (
           <DashboardScreen
@@ -519,6 +524,19 @@ export default function App() {
                 {syncQueueCount}
               </span>
             )}
+          </button>
+
+          {/* Credit Customers */}
+          <button
+            onClick={() => setActiveTab('customers')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all ${
+              activeTab === 'customers'
+                ? 'bg-indigo-600 text-white shadow-md'
+                : 'text-muted hover:text-main'
+            }`}
+          >
+            <UserCheck className="w-4 h-4" />
+            عملاء الآجل
           </button>
 
           {/* Barcode Printing */}

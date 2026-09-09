@@ -23,6 +23,28 @@ try:
             ("pOutputFile", ctypes.c_wchar_p),
             ("pDatatype", ctypes.c_wchar_p)
         ]
+
+    # Explicit type definitions to prevent 64-bit pointer truncation in ctypes
+    OpenPrinter.argtypes = [ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
+    OpenPrinter.restype = ctypes.c_long
+
+    ClosePrinter.argtypes = [ctypes.c_void_p]
+    ClosePrinter.restype = ctypes.c_long
+
+    StartDocPrinter.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(DOC_INFO_1)]
+    StartDocPrinter.restype = ctypes.c_ulong
+
+    EndDocPrinter.argtypes = [ctypes.c_void_p]
+    EndDocPrinter.restype = ctypes.c_long
+
+    StartPagePrinter.argtypes = [ctypes.c_void_p]
+    StartPagePrinter.restype = ctypes.c_long
+
+    EndPagePrinter.argtypes = [ctypes.c_void_p]
+    EndPagePrinter.restype = ctypes.c_long
+
+    WritePrinter.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong)]
+    WritePrinter.restype = ctypes.c_long
 except Exception as e:
     OpenPrinter = None
 

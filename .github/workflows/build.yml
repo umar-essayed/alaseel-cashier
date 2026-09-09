@@ -1,15 +1,16 @@
-name: Build Application
+name: Build Application & Release
 
 on:
   push:
     branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build-windows:
-    name: Build Windows (Zip & Portable)
+    name: Build Windows (Zip & Installer)
     runs-on: windows-latest
 
     steps:
@@ -47,3 +48,39 @@ jobs:
             dist-electron/*.zip
             dist-electron/*.exe
           retention-days: 30
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: success()
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: "الأصيل لقطع الغيار - الإصدار v1.0.${{ github.run_number }}"
+          body: |
+            ## 🎉 تحديث جديد: الأصيل لقطع غيار السيارات (v1.0.${{ github.run_number }})
+            
+            ### 🚀 أبرز التعديلات في هذا الإصدار:
+            1. 🏷️ **تعديل خصم الفاتورة بعد البيع والتسليم:**
+               - ميزة تعديل الخصم من سجل الفواتير مع تحديث الصافي.
+               - تخفيض تلقائي لمديونية العميل الآجل في حال كانت الفاتورة بالآجل.
+               - إمكانية إعادة طباعة الفاتورة بالخصم المحدث.
+               - تسجيل العملية أمنياً في `activity_logs` والمزامنة السحابية.
+            2. 📦 **خانة إجمالي ما دخل المخزن (تراكمي):**
+               - عمود مخصص في جدول المخزون يعرض إجمالي ما ورد للمحل بالتفصيل `(المتاح حالياً + المباع)`.
+               - كارت إحصائي علوي يعرض إجمالي تكلفة البضاعة الداخلة للمخزن.
+            3. 📊 **كارت إجمالي تكلفة البضاعة الداخلة في لوحة التحليلات:**
+               - `المخزون الحالي بالتكلفة + تكلفة ما تم بيعه` مطابق تماماً للتحليلات المحاسبية.
+            4. 📈 **رسومات بيانية تفاعلية دقيقة (Offline 100%):**
+               - منحنى تفاعلي ناعم لمتابعة المبيعات والأرباح اليومية مع فلاتر (7 أيام / 30 يوم / 90 يوم / الكل).
+               - رسم بياني دائري لتوزيع قيمة المخزون حسب الفئات.
+            
+            ---
+            ### 📥 ملفات التحميل:
+            - **`alaseel-cashier-app-win-x64.zip`**: المجلد المضغوط الجاهز للتشغيل المباشر دون تثبيت.
+            - **ملف التثبيت (Setup .exe)**: للتثبيت التلقائي مع عمل اختصار سطح المكتب.
+          files: |
+            dist-electron/*.zip
+            dist-electron/*.exe
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

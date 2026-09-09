@@ -82,6 +82,7 @@ export interface Sale {
   discount: number;
   final_amount: number;
   payment_method: 'CASH' | 'CARD' | 'DEBT';
+  credit_customer_id?: string | null;
   items: SaleItem[];
 }
 
@@ -134,22 +135,12 @@ declare global {
         userId: string,
         username: string
       ) => Promise<{ success: boolean }>;
-      deleteVariant: (variantId: string, userId: string, username: string) => Promise<{ success: boolean }>;
-      deleteSupplier: (supplierId: string, userId: string, username: string) => Promise<{ success: boolean }>;
-      deleteSale: (saleId: string, userId: string, username: string) => Promise<{ success: boolean }>;
-      updateSaleDiscount: (
-        saleId: string,
-        newDiscount: number,
-        userId: string,
-        username: string,
-        reason?: string
-      ) => Promise<{ success: boolean; newDiscount: number; newFinalAmount: number }>;
-      resetAllInvoicesAndAccounts: (userId: string, username: string) => Promise<{ success: boolean }>;
       getSyncQueue: () => Promise<SyncQueueItem[]>;
       markAsSynced: (queueIds: string[]) => Promise<boolean>;
       markAsFailed: (queueId: string, errorMsg: string) => Promise<boolean>;
       getSettings: () => Promise<Record<string, string>>;
       saveSetting: (key: string, value: string) => Promise<boolean>;
+      updateInvoiceDiscount: (saleId: string, newDiscount: number, cashierName: string) => Promise<{ success: boolean; updatedSale: any }>;
       logActivity: (userId: string, username: string, action: string, details: string) => Promise<boolean>;
       printReceipt: (receiptData: {
         storeName: string;

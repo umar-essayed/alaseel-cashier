@@ -22,7 +22,6 @@ export const InventoryScreen: React.FC<InventoryScreenProps> = ({
 
   // Custom UI alert state
   const [alertConfig, setAlertConfig] = useState<{ message: string; type: 'success' | 'error' | 'warning' } | null>(null);
-  const [confirmConfig, setConfirmConfig] = useState<{ message: string; onConfirm: () => void } | null>(null);
 
   const showAlert = (message: string, type: 'success' | 'error' | 'warning' = 'success') => {
     setAlertConfig({ message, type });
@@ -33,6 +32,22 @@ export const InventoryScreen: React.FC<InventoryScreenProps> = ({
   const [adjustStockModal, setAdjustStockModal] = useState(false);
   const [editVariantModal, setEditVariantModal] = useState(false);
   const [addProductModal, setAddProductModal] = useState(false);
+  const [deleteConfirmVariant, setDeleteConfirmVariant] = useState<ProductVariant | null>(null);
+
+  const handleDeleteVariant = async () => {
+    if (!deleteConfirmVariant) return;
+    try {
+      const res = await (window as any).api.deleteVariant(deleteConfirmVariant.id);
+      if (res.success) {
+        setDeleteConfirmVariant(null);
+        loadVariants();
+        onRefreshData();
+        showAlert('تم حذف الصنف نهائياً من المخزن.', 'success');
+      }
+    } catch (e) {
+      showAlert('فشل حذف الصنف.', 'error');
+    }
+  };
 
   // Adjust stock fields
   const [adjustQty, setAdjustQty] = useState(0);
@@ -68,55 +83,31 @@ export const InventoryScreen: React.FC<InventoryScreenProps> = ({
   const [compModel, setCompModel] = useState('');
   const [compStart, setCompStart] = useState(2015);
   const [compEnd, setCompEnd] = useState(2020);
-
-  // Track total sold quantity per variant to calculate total historical inbound stock
-  const [soldMap, setSoldMap] = useState<Record<string, number>>({});
+  const [soldMap, setSoldMap] = useState<Record<string, { qty: number; cost: number }>>({});
 
   const loadVariants = async () => {
     setLoading(true);
     try {
-      const data = await dbClient.getVariants();
-      setVariants(data);
-
-      try {
-        const soldRows = await dbClient.dbQuery('SELECT variant_id, SUM(quantity) as total_sold FROM sale_items GROUP BY variant_id');
-        const map: Record<string, number> = {};
-        (soldRows || []).forEach((r: any) => {
-          if (r.variant_id) {
-            map[r.variant_id] = Number(r.total_sold) || 0;
-          }
+      const [data, saleItems] = await Promise.all([
+        dbClient.getVariants(),
+        dbClient.dbQuery('SELECT variant_id, quantity, cost_price FROM sale_items')
+      ]);
+      setVariants(data || []);
+      const map: Record<string, { qty: number; cost: number }> = {};
+      if (saleItems && Array.isArray(saleItems)) {
+        saleItems.forEach((si: any) => {
+          if (!si.variant_id) return;
+          if (!map[si.variant_id]) map[si.variant_id] = { qty: 0, cost: 0 };
+          map[si.variant_id].qty += Number(si.quantity) || 0;
+          map[si.variant_id].cost += (Number(si.cost_price) || 0) * (Number(si.quantity) || 0);
         });
-        setSoldMap(map);
-      } catch (err) {
-        console.error('Failed to load sold stats for variants:', err);
       }
+      setSoldMap(map);
     } catch (e) {
       console.error(e);
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleDeleteVariant = async (variant: ProductVariant) => {
-    setConfirmConfig({
-      message: `هل أنت متأكد من حذف الصنف "${variant.product_name} (${variant.origin})" بشكل نهائي من المخزن؟ سيؤدي ذلك أيضاً لحذف جميع بيانات التوافقية المرتبطة به ولا يمكن التراجع.`,
-      onConfirm: async () => {
-        try {
-          setLoading(true);
-          const res = await dbClient.deleteVariant(variant.id, currentUserId, currentUsername);
-          if (res.success) {
-            showAlert('✅ تم حذف الصنف بنجاح من المخزن المحلي!', 'success');
-            await loadVariants();
-            onRefreshData();
-          }
-        } catch (e: any) {
-          console.error(e);
-          showAlert(`❌ فشل الحذف: ${e.message || 'خطأ غير معروف'}`, 'error');
-        } finally {
-          setLoading(false);
-        }
-      }
-    });
   };
 
   useEffect(() => {
@@ -319,56 +310,48 @@ export const InventoryScreen: React.FC<InventoryScreenProps> = ({
 
   const totalItems = variants.length;
   const lowStockCount = variants.filter(v => v.stock_quantity <= v.min_limit).length;
-  const currentStockCost = variants.reduce((sum, v) => sum + (v.stock_quantity * v.cost_price), 0);
-  const soldStockCost = variants.reduce((sum, v) => sum + ((soldMap[v.id] || 0) * v.cost_price), 0);
-  const totalEnteredCost = currentStockCost + soldStockCost;
-  const totalAvailableUnits = variants.reduce((sum, v) => sum + v.stock_quantity, 0);
-  const totalEnteredUnits = variants.reduce((sum, v) => sum + v.stock_quantity + (soldMap[v.id] || 0), 0);
+  const totalStockValue = variants.reduce((sum, v) => sum + (v.stock_quantity * v.cost_price), 0);
+  const totalSoldCost = variants.reduce((sum, v) => sum + ((soldMap[v.id]?.cost) || 0), 0);
+  const totalWarehouseEnteredCost = totalStockValue + totalSoldCost;
+  const totalWarehouseEnteredQty = variants.reduce((sum, v) => sum + v.stock_quantity + (soldMap[v.id]?.qty || 0), 0);
 
   return (
     <div className="space-y-6 flex flex-col h-[calc(100vh-100px)] overflow-hidden text-main">
       {/* Top statistics summary */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Total Registered Variants */}
-        <div className="glass-panel p-4 flex items-center justify-between border-l-4 border-l-blue-500 bg-panel border-main">
+        <div className="glass-panel p-5 flex items-center justify-between border-l-4 border-l-blue-500 bg-panel border-main">
           <div>
-            <p className="text-[11px] text-muted font-bold mb-0.5">أصناف قطع الغيار</p>
-            <p className="text-2xl font-black">{totalItems} <span className="text-xs font-normal text-muted">صنف</span></p>
-            <p className="text-[10px] text-muted mt-0.5">المتاح: {totalAvailableUnits.toLocaleString()} وحدة</p>
+            <p className="text-xs text-muted font-bold mb-1">إجمالي قطع الغيار المسجلة</p>
+            <p className="text-2xl font-black">{totalItems} أصناف</p>
           </div>
-          <Layers className="w-8 h-8 text-blue-500 opacity-80" />
+          <Layers className="w-9 h-9 text-blue-500 opacity-80" />
         </div>
 
-        {/* Low Stock Alert */}
-        <div className="glass-panel p-4 flex items-center justify-between border-l-4 border-l-rose-500 bg-panel border-main">
+        <div className="glass-panel p-5 flex items-center justify-between border-l-4 border-l-rose-500 bg-panel border-main">
           <div>
-            <p className="text-[11px] text-muted font-bold mb-0.5">في حد الطلب الحرِج</p>
-            <p className="text-2xl font-black text-rose-500 dark:text-rose-455">{lowStockCount} <span className="text-xs font-normal text-muted">قطع</span></p>
-            <p className="text-[10px] text-rose-400 mt-0.5">تحتاج إعادة طلب فوراً</p>
+            <p className="text-xs text-muted font-bold mb-1">قطع في مستوى حد الطلب الحرِج</p>
+            <p className="text-2xl font-black text-rose-500 dark:text-rose-455">{lowStockCount} قطع</p>
           </div>
-          <AlertTriangle className="w-8 h-8 text-rose-500 opacity-80 animate-pulse" />
+          <AlertTriangle className="w-9 h-9 text-rose-500 opacity-80 animate-pulse" />
         </div>
 
-        {/* Total Inbound / Entered Stock Cost (What entered the warehouse) */}
-        <div className="glass-panel p-4 flex items-center justify-between border-l-4 border-l-indigo-500 bg-panel border-main">
+        <div className="glass-panel p-5 flex items-center justify-between border-l-4 border-l-emerald-500 bg-panel border-main">
           <div>
-            <p className="text-[11px] text-muted font-bold mb-0.5">إجمالي البضاعة الداخلة للمخزن</p>
-            <p className="text-2xl font-black text-indigo-600 dark:text-indigo-400">{totalEnteredCost.toLocaleString()} <span className="text-xs font-normal">ج.م</span></p>
-            <p className="text-[10px] text-muted mt-0.5 font-mono">
-              إجمالي {totalEnteredUnits.toLocaleString()} قطعة واردة
-            </p>
+            <p className="text-xs text-muted font-bold mb-1">قيمة المخزون الحالي (المتاح للتكلفة)</p>
+            <p className="text-2xl font-black text-emerald-500 dark:text-emerald-400">{totalStockValue.toLocaleString()} ج.م</p>
           </div>
-          <Settings className="w-8 h-8 text-indigo-500 opacity-80" />
+          <Settings className="w-9 h-9 text-emerald-500 opacity-80" />
         </div>
 
-        {/* Current Available Stock Value at Cost */}
-        <div className="glass-panel p-4 flex items-center justify-between border-l-4 border-l-emerald-500 bg-panel border-main">
+        <div className="glass-panel p-5 flex items-center justify-between border-l-4 border-l-purple-500 bg-panel border-main">
           <div>
-            <p className="text-[11px] text-muted font-bold mb-0.5">قيمة المخزون الحالي المتاح</p>
-            <p className="text-2xl font-black text-emerald-500 dark:text-emerald-400">{currentStockCost.toLocaleString()} <span className="text-xs font-normal">ج.م</span></p>
-            <p className="text-[10px] text-muted mt-0.5">تكلفة القطع المتوفرة الآن</p>
+            <p className="text-xs text-purple-600 dark:text-purple-400 font-extrabold mb-1">إجمالي ما دخل المخزن (تراكمي)</p>
+            <p className="text-2xl font-black text-purple-600 dark:text-purple-400">{totalWarehouseEnteredCost.toLocaleString()} ج.م</p>
+            <p className="text-[10px] text-muted font-bold mt-0.5">{totalWarehouseEnteredQty.toLocaleString()} وحدة (متاح + مباع)</p>
           </div>
-          <Settings className="w-8 h-8 text-emerald-500 opacity-80" />
+          <div className="w-9 h-9 rounded-xl bg-purple-500/10 flex items-center justify-center text-purple-500 font-black text-lg">
+            ▣
+          </div>
         </div>
       </div>
 
@@ -443,8 +426,8 @@ export const InventoryScreen: React.FC<InventoryScreenProps> = ({
             <tr className="bg-panel-accent text-muted border-b border-main text-xs font-bold uppercase tracking-wider sticky top-0 z-10">
               <th className="py-4 px-6">القطعة / الباركود</th>
               <th className="py-4 px-6">المنشأ / الوصف</th>
-              <th className="py-4 px-6 text-center">الكمية المتاحة حالياً</th>
-              <th className="py-4 px-6 text-center bg-blue-500/5 text-blue-600 dark:text-blue-400">إجمالي ما دخل المخزن</th>
+              <th className="py-4 px-6 text-center">الكمية الحالية</th>
+              <th className="py-4 px-6 text-center bg-purple-500/5 text-purple-600 dark:text-purple-400 font-black">إجمالي ما دخل المخزن</th>
               <th className="py-4 px-6 text-center">حد الطلب (S_min)</th>
               <th className="py-4 px-6">التكلفة والبيع</th>
               <th className="py-4 px-6">التوافقية</th>
@@ -461,10 +444,6 @@ export const InventoryScreen: React.FC<InventoryScreenProps> = ({
             ) : (
               filtered.map(variant => {
                 const isLow = variant.stock_quantity <= variant.min_limit;
-                const soldQty = soldMap[variant.id] || 0;
-                const totalInboundQty = variant.stock_quantity + soldQty;
-                const totalInboundCost = totalInboundQty * variant.cost_price;
-
                 return (
                   <tr
                     key={variant.id}
@@ -487,7 +466,7 @@ export const InventoryScreen: React.FC<InventoryScreenProps> = ({
                       <div className="text-xs text-muted mt-0.5">{variant.specification || 'لا توجد مواصفات فنية إضافية'}</div>
                     </td>
 
-                    {/* Available Stock */}
+                    {/* Stock */}
                     <td className="py-4 px-6 text-center">
                       <span className={`px-3 py-1 rounded-full text-xs font-black border ${
                         isLow
@@ -498,17 +477,26 @@ export const InventoryScreen: React.FC<InventoryScreenProps> = ({
                       </span>
                     </td>
 
-                    {/* Total Inbound Stock (All what entered) */}
-                    <td className="py-4 px-6 text-center bg-blue-500/5">
-                      <div className="font-mono font-black text-xs text-blue-600 dark:text-blue-400">
-                        {totalInboundQty} وحدة
-                      </div>
-                      <div className="text-[10px] text-muted mt-0.5 font-medium">
-                        (مباع: {soldQty} | متبقي: {variant.stock_quantity})
-                      </div>
-                      <div className="text-[9px] text-slate-500 mt-0.5 font-mono">
-                        القيمة: {totalInboundCost.toLocaleString()} ج.م
-                      </div>
+                    {/* Total Entered Warehouse (Cumulative) */}
+                    <td className="py-4 px-6 text-center bg-purple-500/[0.02]">
+                      {(() => {
+                        const sold = soldMap[variant.id]?.qty || 0;
+                        const totalEntered = (variant.stock_quantity || 0) + sold;
+                        const totalCost = totalEntered * variant.cost_price;
+                        return (
+                          <div>
+                            <span className="font-mono font-black text-sm text-purple-600 dark:text-purple-400">
+                              {totalEntered.toLocaleString()} وحدة
+                            </span>
+                            <div className="text-[10px] text-muted font-bold mt-0.5">
+                              بتكلفة: {totalCost.toLocaleString()} ج.م
+                            </div>
+                            <div className="text-[9px] text-slate-400 font-mono mt-0.5">
+                              (متاح: {variant.stock_quantity} · مباع: {sold})
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </td>
 
                     {/* Limit */}
@@ -557,12 +545,11 @@ export const InventoryScreen: React.FC<InventoryScreenProps> = ({
                         </button>
 
                         <button
-                          onClick={() => handleDeleteVariant(variant)}
-                          className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-455 px-3 py-1.5 rounded-lg text-xs font-bold border border-rose-500/20 flex items-center gap-1 transition-all active:scale-95"
-                          title="حذف الصنف نهائياً"
+                          onClick={() => setDeleteConfirmVariant(variant)}
+                          className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-455 p-1.5 rounded-lg text-xs font-bold border border-rose-500/20 flex items-center justify-center transition-all active:scale-95"
+                          title="حذف نهائي"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          حذف الصنف
+                          <Trash2 className="w-4.5 h-4.5" />
                         </button>
                       </div>
                     </td>
@@ -1027,6 +1014,41 @@ export const InventoryScreen: React.FC<InventoryScreenProps> = ({
         </div>
       )}
 
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmVariant && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-panel border border-main rounded-3xl p-6 w-full max-w-md space-y-4 text-right shadow-2xl">
+            <div className="flex items-center gap-2 text-rose-500 font-bold border-b border-main pb-2">
+              <AlertTriangle className="w-5 h-5" />
+              <span>تنبيه: حذف صنف نهائياً</span>
+            </div>
+            <p className="text-sm text-main">
+              هل أنت متأكد من رغبتك في حذف قطعة الغيار:
+              <br />
+              <strong className="text-blue-500">"{deleteConfirmVariant.product_name}" ({deleteConfirmVariant.origin})</strong>
+              <br />
+              ذات الباركود <strong className="font-mono bg-main px-1.5 py-0.5 rounded">{deleteConfirmVariant.sku_barcode}</strong>؟
+              <br />
+              <span className="text-xs text-rose-500 font-bold mt-2 block">تحذير: سيتم حذف هذا الصنف وجميع بيانات التوافقية المرتبطة به نهائياً ولا يمكن الاسترجاع!</span>
+            </p>
+            <div className="flex gap-3 pt-2">
+              <button
+                onClick={handleDeleteVariant}
+                className="flex-1 bg-rose-600 hover:bg-rose-500 text-white font-bold py-2.5 rounded-xl text-xs transition-all active:scale-95 shadow-md"
+              >
+                نعم، احذف نهائياً
+              </button>
+              <button
+                onClick={() => setDeleteConfirmVariant(null)}
+                className="flex-1 bg-main hover:bg-panel-hover border border-main text-muted font-bold py-2.5 rounded-xl text-xs transition-all"
+              >
+                إلغاء
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
       {/* Custom Reusable React Alert Modal Overlay */}
       {alertConfig && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
@@ -1039,32 +1061,6 @@ export const InventoryScreen: React.FC<InventoryScreenProps> = ({
             >
               موافق / إغلاق
             </button>
-          </div>
-        </div>
-      )}
-      {/* Custom Reusable React Confirm Modal Overlay */}
-      {confirmConfig && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
-          <div className="bg-panel border border-main rounded-3xl p-6 w-full max-w-sm space-y-4 text-center shadow-2xl text-main">
-            <div className="text-lg font-bold text-main">تأكيد الإجراء</div>
-            <p className="text-xs text-muted leading-relaxed">{confirmConfig.message}</p>
-            <div className="flex gap-3 pt-2">
-              <button
-                onClick={() => {
-                  confirmConfig.onConfirm();
-                  setConfirmConfig(null);
-                }}
-                className="flex-1 bg-rose-600 hover:bg-rose-500 text-white font-bold py-2.5 rounded-xl text-xs transition-all active:scale-95 shadow-md"
-              >
-                تأكيد ومتابعة
-              </button>
-              <button
-                onClick={() => setConfirmConfig(null)}
-                className="flex-1 bg-main hover:bg-panel-hover text-muted border border-main font-bold py-2.5 rounded-xl text-xs transition-all active:scale-95"
-              >
-                إلغاء
-              </button>
-            </div>
           </div>
         </div>
       )}

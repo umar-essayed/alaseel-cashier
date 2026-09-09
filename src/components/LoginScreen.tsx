@@ -81,8 +81,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, storeS
           };
         }
       } else {
-        if ((username === 'admin' || username === 'احمد مجدي') && password === 'admin123') {
-          loggedUser = { id: 'u1_custom', username: 'احمد مجدي', role: 'ADMIN' };
+        if (username === 'admin' && password === 'admin123') {
+          loggedUser = { id: 'u1', username: 'admin', role: 'ADMIN' };
         } else if (username === 'cashier' && password === 'cashier123') {
           loggedUser = { id: 'u2', username: 'cashier', role: 'CASHIER' };
         }

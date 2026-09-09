@@ -27,6 +27,10 @@ export const SuppliersScreen: React.FC<SuppliersScreenProps> = ({
     setAlertConfig({ message, type });
   };
 
+  const showConfirm = (message: string, onConfirm: () => void) => {
+    setConfirmConfig({ message, onConfirm });
+  };
+
   // Modals
   const [addSupplierModal, setAddSupplierModal] = useState(false);
   const [addTxModal, setAddTxModal] = useState(false);
@@ -65,26 +69,6 @@ export const SuppliersScreen: React.FC<SuppliersScreenProps> = ({
     } catch (e) {
       console.error(e);
     }
-  };
-
-  const handleDeleteSupplier = async (supplier: Supplier) => {
-    setConfirmConfig({
-      message: `هل أنت متأكد من حذف المورد "${supplier.name}" نهائياً من النظام؟ سيؤدي ذلك أيضاً لحذف جميع حركات ديونه ولا يمكن التراجع.`,
-      onConfirm: async () => {
-        try {
-          const res = await dbClient.deleteSupplier(supplier.id, currentUserId, currentUsername);
-          if (res.success) {
-            showAlert('تم حذف المورد بنجاح', 'success');
-            setSelectedSupplier(null);
-            await loadSuppliers();
-            onRefreshData();
-          }
-        } catch (err: any) {
-          console.error(err);
-          showAlert(`فشل حذف المورد: ${err.message || 'خطأ غير معروف'}`, 'error');
-        }
-      }
-    });
   };
 
   useEffect(() => {
@@ -154,6 +138,7 @@ export const SuppliersScreen: React.FC<SuppliersScreenProps> = ({
         await loadSuppliers();
         await loadTransactions(selectedSupplier.id);
         onRefreshData();
+        showAlert('تم تسجيل الحركة المالية للمورد بنجاح');
       }
     } catch (err) {
       console.error(err);
@@ -161,12 +146,12 @@ export const SuppliersScreen: React.FC<SuppliersScreenProps> = ({
     }
   };
 
-  const handleFullSettlement = async (supplier: Supplier) => {
+  const handleFullSettlement = (supplier: Supplier) => {
     if (supplier.current_debt === 0) return;
 
-    setConfirmConfig({
-      message: `هل أنت متأكد من تسوية وإغلاق كامل المديونية للمورد "${supplier.name}" البالغة ${supplier.current_debt} ج.م؟ سيتم تصفير الحساب وإنشاء حركة سداد مطابقة.`,
-      onConfirm: async () => {
+    showConfirm(
+      `هل أنت متأكد من تسوية وإغلاق كامل المديونية للمورد "${supplier.name}" البالغة ${supplier.current_debt} ج.م؟ سيتم تصفير الحساب وإنشاء حركة سداد مطابقة.`,
+      async () => {
         try {
           const res = await dbClient.addSupplierDebt(
             supplier.id,
@@ -183,13 +168,14 @@ export const SuppliersScreen: React.FC<SuppliersScreenProps> = ({
               await loadTransactions(supplier.id);
             }
             onRefreshData();
+            showAlert('تمت تسوية مديونية المورد بنجاح');
           }
         } catch (err) {
           console.error(err);
           showAlert('فشلت عملية تسوية الدين', 'error');
         }
       }
-    });
+    );
   };
 
   const resetSupplierForm = () => {
@@ -261,42 +247,59 @@ export const SuppliersScreen: React.FC<SuppliersScreenProps> = ({
                     <p className="text-xs text-muted mt-0.5">{supplier.address || 'العنوان غير محدد'}</p>
                   </div>
                   
-                  {/* Current Debt Tag */}
-                  <div className="text-left">
+                  {/* Current Debt Tag & Delete Button */}
+                  <div className="flex flex-col items-end gap-2">
                     <span className={`px-2.5 py-1 rounded-full text-xs font-black border ${
                       supplier.current_debt > 0
-                        ? 'bg-rose-500/10 text-rose-600 dark:text-rose-450 border-rose-500/20'
+                        ? 'bg-rose-500/10 text-rose-600 dark:text-rose-455 border-rose-500/20'
                         : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
                     }`}>
                       {supplier.current_debt.toLocaleString()} ج.م
                     </span>
-                    <p className="text-[10px] text-muted mt-2 font-bold">مستحقات المورد</p>
+                    
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        showConfirm(
+                          `هل أنت متأكد من حذف المورد "${supplier.name}" نهائياً وحذف جميع حركات الديون السابقة الخاصة به؟`,
+                          async () => {
+                            try {
+                              const res = await (window as any).api.deleteSupplier(supplier.id);
+                              if (res.success) {
+                                if (selectedSupplier?.id === supplier.id) {
+                                  setSelectedSupplier(null);
+                                }
+                                loadSuppliers();
+                                onRefreshData();
+                                showAlert('تم حذف المورد نهائياً');
+                              }
+                            } catch (err) {
+                              console.error(err);
+                              showAlert('حدث خطأ أثناء حذف المورد.', 'error');
+                            }
+                          }
+                        );
+                      }}
+                      className="text-rose-500 hover:text-rose-400 p-1.5 rounded hover:bg-rose-500/10 transition-all active:scale-90"
+                      title="حذف المورد نهائياً"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
 
-                <div className="mt-4 pt-3 border-t border-main flex gap-2 justify-end items-center">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDeleteSupplier(supplier);
-                    }}
-                    className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-455 text-[10px] font-bold px-3 py-1.5 rounded-lg border border-rose-500/20 flex items-center gap-1 transition-all"
-                    title="حذف المورد"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    حذف المورد
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleSelectSupplier(supplier);
-                      setAddTxModal(true);
-                    }}
-                    className="bg-main hover:bg-panel-hover text-main text-[10px] font-bold px-3 py-1.5 rounded-lg border border-main"
-                  >
-                    دفع / قيد دين
-                  </button>
-                  {supplier.current_debt > 0 && (
+                {supplier.current_debt > 0 && (
+                  <div className="mt-4 pt-3 border-t border-main flex gap-2 justify-end">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleSelectSupplier(supplier);
+                        setAddTxModal(true);
+                      }}
+                      className="bg-main hover:bg-panel-hover text-main text-[10px] font-bold px-3 py-1.5 rounded-lg border border-main"
+                    >
+                      دفع / قيد دين
+                    </button>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -307,8 +310,8 @@ export const SuppliersScreen: React.FC<SuppliersScreenProps> = ({
                       <CheckCircle className="w-3.5 h-3.5" />
                       تسوية كاملة
                     </button>
-                  )}
-                </div>
+                  </div>
+                )}
               </div>
             );
           })}
@@ -359,7 +362,7 @@ export const SuppliersScreen: React.FC<SuppliersScreenProps> = ({
                     transactions.map(tx => (
                       <tr key={tx.id} className="hover:bg-panel-hover/50">
                         <td className="py-3 px-4 font-mono text-[10px] text-muted">
-                          {(tx.created_at || '').replace('T', ' ').substring(0, 19)}
+                          {tx.created_at.replace('T', ' ').substring(0, 19)}
                         </td>
                         <td className="py-3 px-4 text-center">
                           <span className={`px-2.5 py-0.5 rounded font-bold text-[10px] ${
@@ -576,9 +579,10 @@ export const SuppliersScreen: React.FC<SuppliersScreenProps> = ({
           </form>
         </div>
       )}
+
       {/* Custom Reusable React Alert Modal Overlay */}
       {alertConfig && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in animate-fade-in text-main">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
           <div className="bg-panel border border-main rounded-3xl p-6 w-full max-w-sm space-y-4 text-center shadow-2xl">
             <div className="text-lg font-bold text-main">إشعار النظام</div>
             <p className="text-xs text-muted leading-relaxed">{alertConfig.message}</p>
@@ -594,7 +598,7 @@ export const SuppliersScreen: React.FC<SuppliersScreenProps> = ({
 
       {/* Custom Reusable React Confirm Modal Overlay */}
       {confirmConfig && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in text-main">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
           <div className="bg-panel border border-main rounded-3xl p-6 w-full max-w-sm space-y-4 text-center shadow-2xl">
             <div className="text-lg font-bold text-main">تأكيد الإجراء</div>
             <p className="text-xs text-muted leading-relaxed">{confirmConfig.message}</p>

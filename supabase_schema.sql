@@ -111,6 +111,40 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
 );
 
+-- 10. CREDIT CUSTOMERS TABLE (عملاء الآجل)
+CREATE TABLE IF NOT EXISTS credit_customers (
+    id TEXT PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL,
+    phone TEXT,
+    address TEXT,
+    notes TEXT,
+    total_debt NUMERIC(12, 2) DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
+);
+
+-- 11. CUSTOMER PAYMENTS TABLE (سداد ديون العملاء)
+CREATE TABLE IF NOT EXISTS customer_payments (
+    id TEXT PRIMARY KEY,
+    customer_id TEXT REFERENCES credit_customers(id) ON DELETE CASCADE,
+    amount NUMERIC(12, 2) NOT NULL,
+    notes TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
+);
+
+-- 12. REFUND LOGS TABLE (سجل المرتجعات)
+CREATE TABLE IF NOT EXISTS refund_logs (
+    id TEXT PRIMARY KEY,
+    sale_id TEXT,
+    invoice_number TEXT NOT NULL,
+    variant_id TEXT,
+    name TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    quantity INTEGER NOT NULL,
+    refund_amount NUMERIC(12, 2) NOT NULL,
+    cashier_name TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
+);
+
 -- ==================================================================================
 -- ROW LEVEL SECURITY (RLS) CONFIGURATION
 -- Disabling RLS allows the frontend client and offline app to query tables immediately.
@@ -124,8 +158,11 @@ ALTER TABLE suppliers DISABLE ROW LEVEL SECURITY;
 ALTER TABLE supplier_debts DISABLE ROW LEVEL SECURITY;
 ALTER TABLE cashier_users DISABLE ROW LEVEL SECURITY;
 ALTER TABLE activity_logs DISABLE ROW LEVEL SECURITY;
+ALTER TABLE credit_customers DISABLE ROW LEVEL SECURITY;
+ALTER TABLE customer_payments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE refund_logs DISABLE ROW LEVEL SECURITY;
 
 -- Seed default admin account
 INSERT INTO cashier_users (id, username, password_hash, role, phone)
-VALUES ('u1_custom', 'احمد مجدي', 'admin123', 'ADMIN', '01022222222')
+VALUES ('u1', 'admin', 'admin123', 'ADMIN', '01011111111')
 ON CONFLICT (username) DO NOTHING;

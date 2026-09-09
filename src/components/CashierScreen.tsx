@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Search, ShoppingCart, Trash2, Plus, Minus, CreditCard, Banknote, User, AlertCircle, Printer, Sparkles, X, ChevronLeft, Bookmark } from 'lucide-react';
+import { Search, ShoppingCart, Trash2, Plus, Minus, CreditCard, Banknote, User, AlertCircle, Printer, Sparkles, X, ChevronLeft, Bookmark, UserCheck } from 'lucide-react';
 import { dbClient } from '../database/dbClient';
 import { ProductVariant, Sale, SaleItem } from '../types';
 import { playSound } from '../utils/audio';
@@ -21,9 +21,14 @@ export const CashierScreen: React.FC<CashierScreenProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [cart, setCart] = useState<Array<ProductVariant & { quantitySelected: number }>>([]);
   const [discount, setDiscount] = useState<number>(0);
-  const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'VODAFONE_CASH'>('CASH');
+  const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'VODAFONE_CASH' | 'DEBT'>('CASH');
   const [customerName, setCustomerName] = useState('');
+  const [selectedCreditCustomerId, setSelectedCreditCustomerId] = useState<string | null>(null);
+  const [creditCustomers, setCreditCustomers] = useState<Array<{ id: string; name: string; phone?: string; total_debt: number }>>([]);
+  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | 'warning' } | null>(null);
+  const customerInputRef = useRef<HTMLInputElement>(null);
+  const customerDropdownRef = useRef<HTMLDivElement>(null);
 
   // Custom UI alert & confirm states (replaces browser blocking alert/confirm)
   const [confirmConfig, setConfirmConfig] = useState<{ message: string; onConfirm: () => void } | null>(null);
@@ -61,7 +66,7 @@ export const CashierScreen: React.FC<CashierScreenProps> = ({
     customerName: string;
     cart: typeof cart;
     discount: number;
-    paymentMethod: 'CASH' | 'VODAFONE_CASH';
+    paymentMethod: 'CASH' | 'VODAFONE_CASH' | 'DEBT';
     selectedVodafoneNumber: string;
     timestamp: string;
   }>>([]);
@@ -70,6 +75,28 @@ export const CashierScreen: React.FC<CashierScreenProps> = ({
   const [pickerProduct, setPickerProduct] = useState<{ name: string; category: string; variants: ProductVariant[] } | null>(null);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Load credit customers for DEBT payment dropdown
+  const loadCreditCustomers = async () => {
+    try {
+      const data = await (window as any).api.getCreditCustomers();
+      setCreditCustomers(data || []);
+    } catch (e) {}
+  };
+
+  // Close customer dropdown on outside click
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      if (
+        customerDropdownRef.current && !customerDropdownRef.current.contains(e.target as Node) &&
+        customerInputRef.current && !customerInputRef.current.contains(e.target as Node)
+      ) {
+        setShowCustomerDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
 
   // Load available parts variants
   const loadData = async () => {
@@ -83,6 +110,7 @@ export const CashierScreen: React.FC<CashierScreenProps> = ({
 
   useEffect(() => {
     loadData();
+    loadCreditCustomers();
   }, []);
 
   // Group variants by product name
@@ -144,30 +172,66 @@ export const CashierScreen: React.FC<CashierScreenProps> = ({
     return () => window.removeEventListener('keydown', handleKeyPress);
   }, [variants, cart]);
 
-  // Handle scanned barcode
+  // Handle scanned barcode — Smart Fallback for out-of-stock variants
   const handleBarcodeScanned = (barcode: string) => {
     const cleanedBarcode = barcode.trim();
     const matched = variants.filter(v => v.sku_barcode === cleanedBarcode);
-    
-    if (matched.length === 1) {
-      playSound('scan');
-      addToCart(matched[0]);
-      showTemporaryMessage(`تم مسح الباركود بنجاح: ${matched[0].product_name} (${matched[0].origin})`, 'success');
-      dbClient.logActivity(currentUserId, currentUsername, 'BARCODE_SCANNED', `مسح باركود ${cleanedBarcode} للصنف ${matched[0].product_name}`);
-    } else if (matched.length > 1) {
-      playSound('scan');
-      setPickerProduct({
-        name: matched[0].product_name || '',
-        category: matched[0].category || '',
-        variants: matched
-      });
-      showTemporaryMessage(`الباركود مشترك لعدة بدائل؛ يرجى اختيار المنشأ المطلوب.`, 'warning');
-    } else {
+
+    if (matched.length === 0) {
       playSound('error');
       showTemporaryMessage(`باركود غير مسجل بالمخزن: ${cleanedBarcode}`, 'warning');
       dbClient.logActivity(currentUserId, currentUsername, 'SCAN_FAILED', `محاولة مسح باركود غير مسجل: ${cleanedBarcode}`);
+      return;
+    }
+
+    // Single exact match
+    if (matched.length === 1) {
+      const v = matched[0];
+      if (v.stock_quantity > 0) {
+        playSound('scan');
+        addToCart(v);
+        showTemporaryMessage(`✅ تم مسح الباركود: ${v.product_name} (${v.origin})`, 'success');
+        dbClient.logActivity(currentUserId, currentUsername, 'BARCODE_SCANNED', `مسح باركود ${cleanedBarcode} للصنف ${v.product_name}`);
+      } else {
+        // Out of stock — look for sibling variants of same product with stock
+        const siblings = variants.filter(
+          sv => sv.product_id === v.product_id && sv.id !== v.id && sv.stock_quantity > 0
+        );
+        if (siblings.length === 1) {
+          playSound('scan');
+          addToCart(siblings[0]);
+          showTemporaryMessage(
+            `⚠️ "${v.origin}" غير متاح — تم إضافة "${siblings[0].origin}" تلقائياً (${v.product_name})`,
+            'warning'
+          );
+        } else if (siblings.length > 1) {
+          playSound('scan');
+          setPickerProduct({ name: v.product_name || '', category: v.category || '', variants: siblings });
+          showTemporaryMessage(`⚠️ "${v.origin}" غير متاح — اختر من البدائل المتوفرة`, 'warning');
+        } else {
+          playSound('error');
+          showTemporaryMessage(`❌ "${v.product_name}" — جميع البدائل غير متوفرة في المخزن!`, 'error');
+        }
+      }
+      return;
+    }
+
+    // Multiple matches (shared barcode) — show only in-stock ones first
+    const inStock = matched.filter(v => v.stock_quantity > 0);
+    if (inStock.length === 1) {
+      playSound('scan');
+      addToCart(inStock[0]);
+      showTemporaryMessage(`✅ تم إضافة: ${inStock[0].product_name} (${inStock[0].origin})`, 'success');
+    } else if (inStock.length > 1) {
+      playSound('scan');
+      setPickerProduct({ name: matched[0].product_name || '', category: matched[0].category || '', variants: inStock });
+      showTemporaryMessage('الباركود مشترك لعدة بدائل — يرجى اختيار المنشأ المطلوب.', 'warning');
+    } else {
+      playSound('error');
+      showTemporaryMessage('جميع بدائل هذا الباركود غير متوفرة في المخزن!', 'error');
     }
   };
+
 
   // Keyboard Shortcuts (F1: Search, F2: Pay, F4: Hold, F5: Reset)
   useEffect(() => {
@@ -288,6 +352,8 @@ export const CashierScreen: React.FC<CashierScreenProps> = ({
       playSound('scan');
       setPickerProduct(prod);
     }
+    // Clear search after selection for clean next scan
+    setSearchTerm('');
   };
 
   const updateCartQty = (variantId: string, newQty: number) => {
@@ -325,6 +391,7 @@ export const CashierScreen: React.FC<CashierScreenProps> = ({
     setDiscount(0);
     setPaymentMethod('CASH');
     setCustomerName('');
+    setSelectedCreditCustomerId(null);
   };
 
   const getSubtotal = () => cart.reduce((sum, item) => sum + item.selling_price * item.quantitySelected, 0);
@@ -340,6 +407,12 @@ export const CashierScreen: React.FC<CashierScreenProps> = ({
     if (paymentMethod === 'VODAFONE_CASH' && !selectedVodafoneNumber) {
       playSound('error');
       showTemporaryMessage('يرجى تحديد رقم فودافون كاش الذي استلمت عليه التحويل!', 'error');
+      return;
+    }
+
+    if (paymentMethod === 'DEBT' && !selectedCreditCustomerId) {
+      playSound('error');
+      showTemporaryMessage('يرجى تحديد عميل آجل مربوط من القائمة لتسجيل الدين عليه!', 'error');
       return;
     }
 
@@ -360,6 +433,10 @@ export const CashierScreen: React.FC<CashierScreenProps> = ({
       ? `${customerName ? customerName : 'عميل نقدي'} (تحويل فودافون كاش: ${selectedVodafoneNumber})`
       : (customerName || 'عميل نقدي');
 
+    const mappedPaymentMethod = paymentMethod === 'DEBT'
+      ? 'DEBT'
+      : (paymentMethod === 'VODAFONE_CASH' ? 'CARD' : 'CASH');
+
     const saleData: Sale = {
       id: saleId,
       invoice_number: invoiceNumber,
@@ -369,7 +446,8 @@ export const CashierScreen: React.FC<CashierScreenProps> = ({
       total_amount: getSubtotal(),
       discount: discount,
       final_amount: getTotal(),
-      payment_method: paymentMethod === 'VODAFONE_CASH' ? 'CARD' : 'CASH', // Map to CARD to satisfy SQLite check constraints
+      payment_method: mappedPaymentMethod,
+      credit_customer_id: selectedCreditCustomerId,
       items: saleItems
     };
 
@@ -397,7 +475,7 @@ export const CashierScreen: React.FC<CashierScreenProps> = ({
             totalAmount: saleData.total_amount,
             discount: saleData.discount,
             finalAmount: saleData.final_amount,
-            paymentMethod: paymentMethod === 'VODAFONE_CASH' ? 'CARD' : 'CASH',
+            paymentMethod: mappedPaymentMethod,
             headerMsg: storeSettings.invoice_header || 'مرحباً بكم ثقة وأمان',
             footerMsg: storeSettings.invoice_footer || 'شكراً لتعاملكم معنا',
             qrCodeData: `INV-VERIFY-${invoiceNumber}-${saleData.final_amount}`
@@ -406,6 +484,7 @@ export const CashierScreen: React.FC<CashierScreenProps> = ({
 
         resetCart();
         loadData();
+        loadCreditCustomers();
         onRefreshData();
       }
     } catch (err) {
@@ -433,6 +512,46 @@ export const CashierScreen: React.FC<CashierScreenProps> = ({
     return matchesName || matchesCategory || matchesVariant;
   });
 
+  // Handle Enter key in search field: auto-add product or open variant picker then clear field
+  const handleSearchEnter = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter') return;
+    const term = searchTerm.trim();
+    if (!term) return;
+
+    // Priority 1: exact barcode match across all variants
+    const exactBarcode = variants.filter(v => v.sku_barcode === term);
+    if (exactBarcode.length === 1) {
+      playSound('scan');
+      addToCart(exactBarcode[0]);
+      showTemporaryMessage(`✅ تمت إضافة: ${exactBarcode[0].product_name} (${exactBarcode[0].origin})`, 'success');
+      setSearchTerm('');
+      return;
+    }
+    if (exactBarcode.length > 1) {
+      playSound('scan');
+      setPickerProduct({ name: exactBarcode[0].product_name || '', category: exactBarcode[0].category || '', variants: exactBarcode });
+      setSearchTerm('');
+      return;
+    }
+
+    // Priority 2: single product match → add (or open picker if multiple variants)
+    if (filteredProducts.length === 1) {
+      const prod = filteredProducts[0];
+      playSound('scan');
+      if (prod.variants.length === 1) {
+        addToCart(prod.variants[0]);
+        showTemporaryMessage(`✅ تمت إضافة: ${prod.name}`, 'success');
+      } else {
+        setPickerProduct(prod);
+      }
+      setSearchTerm('');
+      return;
+    }
+
+    // Priority 3: multiple matches — show message but don't clear
+    showTemporaryMessage(`تم العثور على ${filteredProducts.length} نتائج — حدد منتجاً بالنقر أو ضيّق البحث`, 'warning');
+  };
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-[calc(100vh-100px)] text-main">
       
@@ -453,11 +572,12 @@ export const CashierScreen: React.FC<CashierScreenProps> = ({
               ref={searchInputRef}
               type="text"
               className="w-full bg-input-field border border-main text-main placeholder-slate-400 dark:placeholder-slate-650 rounded-xl py-3 pr-10 pl-4 text-right focus:outline-none focus:ring-1 focus:ring-blue-500 font-bold"
-              placeholder="ابحث بالاسم، الباركود، أو السيارة المتوافقة... (اضغط F1 للتركيز)"
+              placeholder="ابحث أو امسح باركود ثم اضغط Enter للإضافة الفورية... (F1 للتركيز)"
               value={searchTerm}
               onFocus={() => setIsSearchFocused(true)}
               onBlur={() => setIsSearchFocused(false)}
               onChange={(e) => setSearchTerm(e.target.value)}
+              onKeyDown={handleSearchEnter}
             />
           </div>
         </div>
@@ -634,20 +754,74 @@ export const CashierScreen: React.FC<CashierScreenProps> = ({
 
         {/* Input Details */}
         <div className="space-y-3 pt-3 border-t border-main">
-          {/* Customer Name */}
+          {/* Customer Name + Credit Customer Dropdown */}
           <div>
-            <label className="block text-xs text-muted mb-1 font-bold">اسم العميل</label>
+            <label className="block text-xs text-muted mb-1 font-bold">
+              اسم العميل
+              {selectedCreditCustomerId && (
+                <span className="mr-2 text-indigo-400 font-bold text-[10px]">✓ عميل آجل مربوط</span>
+              )}
+            </label>
             <div className="relative">
               <User className="absolute right-3 top-2.5 w-4.5 h-4.5 text-muted" />
               <input
+                ref={customerInputRef}
                 type="text"
-                className="w-full bg-input-field text-main placeholder-slate-400 dark:placeholder-slate-650 rounded-xl py-1.5 pr-9 pl-3 text-right focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm border border-main"
-                placeholder="اسم العميل أو كتابة ملاحظات"
+                className={`w-full bg-input-field text-main placeholder-slate-400 dark:placeholder-slate-650 rounded-xl py-1.5 pr-9 pl-3 text-right focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm border ${selectedCreditCustomerId ? 'border-indigo-500/60' : 'border-main'}`}
+                placeholder="اسم العميل أو ابحث في قائمة عملاء الآجل..."
                 value={customerName}
-                onChange={(e) => setCustomerName(e.target.value)}
+                onFocus={() => { setShowCustomerDropdown(true); loadCreditCustomers(); }}
+                onChange={(e) => {
+                  setCustomerName(e.target.value);
+                  setSelectedCreditCustomerId(null);
+                  setShowCustomerDropdown(true);
+                }}
               />
+              {selectedCreditCustomerId && (
+                <button
+                  onClick={() => { setSelectedCreditCustomerId(null); setCustomerName(''); }}
+                  className="absolute left-2 top-2.5 text-muted hover:text-rose-400 transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+              {/* Dropdown */}
+              {showCustomerDropdown && (
+                <div
+                  ref={customerDropdownRef}
+                  className="absolute top-full mt-1 left-0 right-0 bg-panel border border-indigo-500/30 rounded-xl shadow-2xl z-50 max-h-48 overflow-y-auto"
+                >
+                  {creditCustomers.length === 0 ? (
+                    <div className="text-center py-3 text-muted text-xs">لا يوجد عملاء آجل مسجلون</div>
+                  ) : (
+                    creditCustomers
+                      .filter(c => !customerName || c.name.toLowerCase().includes(customerName.toLowerCase()) || (c.phone || '').includes(customerName))
+                      .map(cust => (
+                        <div
+                          key={cust.id}
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            setCustomerName(cust.name);
+                            setSelectedCreditCustomerId(cust.id);
+                            setShowCustomerDropdown(false);
+                          }}
+                          className="flex justify-between items-center px-3 py-2 hover:bg-indigo-500/10 cursor-pointer border-b border-main last:border-0 transition-colors"
+                        >
+                          <div>
+                            <div className="text-xs font-bold text-main">{cust.name}</div>
+                            {cust.phone && <div className="text-[10px] text-muted">{cust.phone}</div>}
+                          </div>
+                          <div className={`text-[10px] font-black font-mono ${cust.total_debt > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                            {cust.total_debt > 0 ? `${cust.total_debt.toLocaleString()} ج.م دين` : '✓ مسدد'}
+                          </div>
+                        </div>
+                      ))
+                  )}
+                </div>
+              )}
             </div>
           </div>
+
 
           {/* Discount Field */}
           <div>
@@ -665,31 +839,49 @@ export const CashierScreen: React.FC<CashierScreenProps> = ({
           {/* Payment Method Selector */}
           <div>
             <label className="block text-xs text-muted mb-1.5 font-bold">طريقة الدفع</label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <button
                 type="button"
                 onClick={() => setPaymentMethod('CASH')}
-                className={`py-2.5 rounded-xl text-xs font-bold transition-all border flex flex-col items-center justify-center gap-1 ${
+                className={`py-2 rounded-xl text-[10px] font-bold transition-all border flex flex-col items-center justify-center gap-1 ${
                   paymentMethod === 'CASH'
                     ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500 shadow-sm'
                     : 'bg-main text-muted border-main hover:text-main'
                 }`}
               >
-                <Banknote className="w-4.5 h-4.5" />
+                <Banknote className="w-4 h-4" />
                 نقدي / كاش
               </button>
               
               <button
                 type="button"
                 onClick={() => setPaymentMethod('VODAFONE_CASH')}
-                className={`py-2.5 rounded-xl text-xs font-bold transition-all border flex flex-col items-center justify-center gap-1 ${
+                className={`py-2 rounded-xl text-[10px] font-bold transition-all border flex flex-col items-center justify-center gap-1 ${
                   paymentMethod === 'VODAFONE_CASH'
                     ? 'bg-rose-500/10 text-rose-600 dark:text-rose-455 border-rose-500 shadow-sm'
                     : 'bg-main text-muted border-main hover:text-main'
                 }`}
               >
-                <CreditCard className="w-4.5 h-4.5" />
+                <CreditCard className="w-4 h-4" />
                 فودافون كاش
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setPaymentMethod('DEBT');
+                  loadCreditCustomers();
+                  // auto focus customer field to select customer
+                  customerInputRef.current?.focus();
+                }}
+                className={`py-2 rounded-xl text-[10px] font-bold transition-all border flex flex-col items-center justify-center gap-1 ${
+                  paymentMethod === 'DEBT'
+                    ? 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500 shadow-sm'
+                    : 'bg-main text-muted border-main hover:text-main'
+                }`}
+              >
+                <UserCheck className="w-4 h-4" />
+                آجل / دين
               </button>
             </div>
           </div>

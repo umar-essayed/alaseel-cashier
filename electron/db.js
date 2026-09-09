@@ -21,7 +21,6 @@ if (!fs.existsSync(dir)) {
 try {
   const Database = require('better-sqlite3');
   db = new Database(dbPath, { verbose: console.log });
-  db.pragma('foreign_keys = ON');
   console.log('SQLite database initialized successfully at:', dbPath);
 } catch (err) {
   console.error('Failed to load better-sqlite3. Using memory-backed fallback database for development.', err);
@@ -72,6 +71,14 @@ function saveFallbackStore() {
 function initDb() {
   if (isFallback) {
     console.log('Configuring schema in fallback memory database...');
+    if (fallbackStore.settings) {
+      if (!fallbackStore.settings.store_name || fallbackStore.settings.store_name === 'البرنس' || fallbackStore.settings.store_name === 'البرنس لقطع الغيار') {
+        fallbackStore.settings.store_name = 'الأصيل لقطع الغيار';
+      }
+      if (!fallbackStore.settings.invoice_header || fallbackStore.settings.invoice_header.includes('البرنس')) {
+        fallbackStore.settings.invoice_header = 'مرحباً بكم في محلات الأصيل لقطع الغيار - ثقة وأمان';
+      }
+    }
     // Seed default data if empty
     if (fallbackStore.cashier_users.length === 0) {
       seedFallbackData();
@@ -195,6 +202,38 @@ function initDb() {
       role TEXT CHECK(role IN ('ADMIN', 'CASHIER')),
       created_at TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS credit_customers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      phone TEXT,
+      address TEXT,
+      notes TEXT,
+      total_debt REAL DEFAULT 0,
+      created_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS customer_payments (
+      id TEXT PRIMARY KEY,
+      customer_id TEXT NOT NULL,
+      amount REAL NOT NULL,
+      notes TEXT,
+      created_at TEXT,
+      FOREIGN KEY(customer_id) REFERENCES credit_customers(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS refund_logs (
+      id TEXT PRIMARY KEY,
+      sale_id TEXT,
+      invoice_number TEXT,
+      variant_id TEXT,
+      name TEXT,
+      origin TEXT,
+      quantity INTEGER,
+      refund_amount REAL,
+      cashier_name TEXT,
+      created_at TEXT
+    );
   `);
 
   // Run migrations to ensure columns exist in existing databases
@@ -214,11 +253,33 @@ function initDb() {
     db.prepare('ALTER TABLE sale_items ADD COLUMN origin TEXT').run();
   } catch (e) {}
 
+  try {
+    db.prepare('ALTER TABLE sales ADD COLUMN credit_customer_id TEXT').run();
+  } catch (e) {}
+
 
   // Seed default data if users table is empty
   const userCheck = db.prepare('SELECT count(*) as count FROM cashier_users').get();
   if (userCheck.count === 0) {
     seedSqliteData();
+  }
+
+  // Ensure settings are updated to "الأصيل لقطع الغيار" if they are currently set to "البرنس"
+  try {
+    const currentStoreName = db.prepare("SELECT value FROM settings WHERE key = 'store_name'").get();
+    if (!currentStoreName || currentStoreName.value === 'البرنس' || currentStoreName.value === 'البرنس لقطع الغيار') {
+      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('store_name', 'الأصيل لقطع الغيار')").run();
+    }
+    const currentHeader = db.prepare("SELECT value FROM settings WHERE key = 'invoice_header'").get();
+    if (!currentHeader || currentHeader.value.includes('البرنس')) {
+      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('invoice_header', 'مرحباً بكم في محلات الأصيل لقطع الغيار - ثقة وأمان')").run();
+    }
+    // Delete default user 'احمد مجدي' if exists to clean up database
+    try {
+      db.prepare("DELETE FROM cashier_users WHERE username = 'احمد مجدي'").run();
+    } catch (err) {}
+  } catch (e) {
+    console.error('Failed to update store name defaults:', e);
   }
 }
 
@@ -239,10 +300,10 @@ function seedSqliteData() {
   
   // Insert Settings
   const insertSetting = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
-  insertSetting.run('store_name', 'البرنس لقطع غيار السيارات');
+  insertSetting.run('store_name', 'الأصيل لقطع الغيار');
   insertSetting.run('store_phone', '01012345678');
   insertSetting.run('store_logo', '');
-  insertSetting.run('invoice_header', 'مرحباً بكم في محلات البرنس لقطع الغيار - ثقة وأمان');
+  insertSetting.run('invoice_header', 'مرحباً بكم في محلات الأصيل لقطع الغيار - ثقة وأمان');
   insertSetting.run('invoice_footer', 'الفاتورة صالحة للمرتجع خلال 14 يوماً مع وجود العبوة الأصلية');
   insertSetting.run('vodafone_cash_numbers', '01011111111,01022222222');
   insertSetting.run('supabase_url', 'https://oplxmybjgesqyqywcwhl.supabase.co');
@@ -251,7 +312,6 @@ function seedSqliteData() {
   // Insert Default Cashier
   const insertUser = db.prepare('INSERT INTO cashier_users (id, username, password_hash, role, phone, created_at) VALUES (?, ?, ?, ?, ?, ?)');
   insertUser.run('u1', 'admin', 'admin123', 'ADMIN', '01011111111', getTimestamp());
-  insertUser.run('u1_custom', 'احمد مجدي', 'admin123', 'ADMIN', '01022222222', getTimestamp());
   insertUser.run('u2', 'cashier', 'cashier123', 'CASHIER', '01033333333', getTimestamp());
 
   // Insert Default Suppliers
@@ -298,10 +358,10 @@ function seedSqliteData() {
 function seedFallbackData() {
   console.log('Seeding default data into Memory Fallback...');
   fallbackStore.settings = {
-    store_name: 'البرنس لقطع غيار السيارات',
+    store_name: 'الأصيل لقطع الغيار',
     store_phone: '01012345678',
     store_logo: '',
-    invoice_header: 'مرحباً بكم في محلات البرنس لقطع الغيار - ثقة وأمان',
+    invoice_header: 'مرحباً بكم في محلات الأصيل لقطع الغيار - ثقة وأمان',
     invoice_footer: 'الفاتورة صالحة للمرتجع خلال 14 يوماً مع وجود العبوة الأصلية',
     vodafone_cash_numbers: '01011111111,01022222222',
     supabase_url: 'https://oplxmybjgesqyqywcwhl.supabase.co',
@@ -310,7 +370,6 @@ function seedFallbackData() {
 
   fallbackStore.cashier_users = [
     { id: 'u1', username: 'admin', password_hash: 'admin123', role: 'ADMIN', phone: '01011111111', created_at: getTimestamp() },
-    { id: 'u1_custom', username: 'احمد مجدي', password_hash: 'admin123', role: 'ADMIN', phone: '01022222222', created_at: getTimestamp() },
     { id: 'u2', username: 'cashier', password_hash: 'cashier123', role: 'CASHIER', phone: '01033333333', created_at: getTimestamp() }
   ];
 
@@ -365,9 +424,34 @@ const handlers = {
           return { ...v, product_name: prod ? prod.name : 'Unknown Product', product_category: prod ? prod.category : '' };
         });
       }
-      if (sql.includes('FROM suppliers')) return fallbackStore.suppliers;
+      if (sql.includes('INSERT INTO suppliers')) {
+        const [id, name, phone, email, address, current_debt, created_at] = params;
+        if (!fallbackStore.suppliers) fallbackStore.suppliers = [];
+        fallbackStore.suppliers.push({ id, name, phone, email, address, current_debt: Number(current_debt) || 0, created_at });
+        saveFallbackStore();
+        return { success: true };
+      }
+      if (sql.includes('INSERT INTO supplier_debts')) {
+        const [id, supplier_id, transaction_type, amount, previous_debt, new_debt, notes, created_at] = params;
+        if (!fallbackStore.supplier_debts) fallbackStore.supplier_debts = [];
+        fallbackStore.supplier_debts.push({ id, supplier_id, transaction_type, amount: Number(amount), previous_debt: Number(previous_debt), new_debt: Number(new_debt), notes, created_at });
+        saveFallbackStore();
+        return { success: true };
+      }
+      if (sql.includes('UPDATE suppliers SET current_debt')) {
+        // UPDATE suppliers SET current_debt = ? WHERE id = ?
+        const [debt, id] = params;
+        const s = fallbackStore.suppliers.find(x => x.id === id);
+        if (s) {
+          s.current_debt = Number(debt);
+          saveFallbackStore();
+        }
+        return { success: true };
+      }
+      if (sql.includes('FROM suppliers')) return fallbackStore.suppliers || [];
       if (sql.includes('FROM supplier_debts')) {
-        return fallbackStore.supplier_debts.filter(d => !params[0] || d.supplier_id === params[0]);
+        const supId = params[0];
+        return (fallbackStore.supplier_debts || []).filter(d => !supId || d.supplier_id === supId);
       }
       if (sql.includes('FROM activity_logs')) {
         return [...fallbackStore.activity_logs].sort((a, b) => b.created_at.localeCompare(a.created_at));
@@ -454,13 +538,22 @@ const handlers = {
 
   // Process a sale (within a transaction)
   checkout: (saleData) => {
-    const { id, invoice_number, cashier_id, cashier_name, customer_name, total_amount, discount, final_amount, payment_method, items } = saleData;
+    const { id, invoice_number, cashier_id, cashier_name, customer_name, total_amount, discount, final_amount, payment_method, credit_customer_id, items } = saleData;
     const ts = getTimestamp();
 
     if (isFallback) {
-      // 1. Insert Sale record — include cashier_name
-      const sale = { id, invoice_number, cashier_id, cashier_name, customer_name, total_amount, discount, final_amount, payment_method, created_at: ts };
+      // 1. Insert Sale record — include cashier_name & credit_customer_id
+      const sale = { id, invoice_number, cashier_id, cashier_name, customer_name, total_amount, discount, final_amount, payment_method, credit_customer_id: credit_customer_id || null, created_at: ts };
       fallbackStore.sales.push(sale);
+
+      // Update customer debt if payment is DEBT
+      if (payment_method === 'DEBT' && credit_customer_id) {
+        if (!fallbackStore.credit_customers) fallbackStore.credit_customers = [];
+        const cust = fallbackStore.credit_customers.find(c => c.id === credit_customer_id);
+        if (cust) {
+          cust.total_debt = (cust.total_debt || 0) + final_amount;
+        }
+      }
 
       // 2. Process Items — enrich with id, name, origin from variant
       const enrichedItems = items.map(item => {
@@ -513,11 +606,16 @@ const handlers = {
 
     // SQLite Transaction
     const transaction = db.transaction(() => {
-      // Insert Sale — include cashier_name column
+      // Insert Sale — include cashier_name & credit_customer_id columns
       db.prepare(`
-        INSERT INTO sales (id, invoice_number, cashier_id, cashier_name, customer_name, total_amount, discount, final_amount, payment_method, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(id, invoice_number, cashier_id, cashier_name || '', customer_name, total_amount, discount, final_amount, payment_method, ts);
+        INSERT INTO sales (id, invoice_number, cashier_id, cashier_name, customer_name, total_amount, discount, final_amount, payment_method, credit_customer_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(id, invoice_number, cashier_id, cashier_name || '', customer_name, total_amount, discount, final_amount, payment_method, credit_customer_id || null, ts);
+
+      // Update customer debt if payment is DEBT
+      if (payment_method === 'DEBT' && credit_customer_id) {
+        db.prepare('UPDATE credit_customers SET total_debt = total_debt + ? WHERE id = ?').run(final_amount, credit_customer_id);
+      }
 
       // Process Items — enrich from variants table
       const insertItem = db.prepare(`
@@ -547,7 +645,7 @@ const handlers = {
       // Add to Sync Queue — proper payload with enriched items
       const syncId = 'sync_' + Math.random().toString(36).substr(2, 9);
       const queueData = JSON.stringify({
-        sale: { id, invoice_number, cashier_id, cashier_name: cashier_name || '', customer_name, total_amount, discount, final_amount, payment_method, created_at: ts },
+        sale: { id, invoice_number, cashier_id, cashier_name: cashier_name || '', customer_name, total_amount, discount, final_amount, payment_method, credit_customer_id: credit_customer_id || null, created_at: ts },
         items: enrichedItems
       });
       db.prepare(`
@@ -1086,380 +1184,6 @@ const handlers = {
     }
   },
 
-  deleteVariant: (variantId, userId, username) => {
-    const ts = getTimestamp();
-    if (isFallback) {
-      const variant = fallbackStore.product_variants.find(v => v.id === variantId);
-      if (!variant) throw new Error('Variant not found');
-      
-      fallbackStore.product_compatibility = fallbackStore.product_compatibility.filter(c => c.variant_id !== variantId);
-      fallbackStore.product_variants = fallbackStore.product_variants.filter(v => v.id !== variantId);
-      
-      const productVariantsCount = fallbackStore.product_variants.filter(v => v.product_id === variant.product_id).length;
-      if (productVariantsCount === 0) {
-        fallbackStore.products = fallbackStore.products.filter(p => p.id !== variant.product_id);
-        
-        fallbackStore.sync_queue.push({
-          id: 'sync_' + Math.random().toString(36).substr(2, 9),
-          table_name: 'products_delete',
-          operation: 'DELETE',
-          record_id: variant.product_id,
-          data: JSON.stringify({ id: variant.product_id }),
-          status: 'pending',
-          created_at: ts
-        });
-      }
-
-      fallbackStore.sync_queue.push({
-        id: 'sync_' + Math.random().toString(36).substr(2, 9),
-        table_name: 'product_variants_delete',
-        operation: 'DELETE',
-        record_id: variantId,
-        data: JSON.stringify({ id: variantId }),
-        status: 'pending',
-        created_at: ts
-      });
-
-      fallbackStore.activity_logs.push({
-        id: 'log_' + Math.random().toString(36).substr(2, 9),
-        user_id: userId,
-        username,
-        action: 'VARIANT_DELETED',
-        details: `حذف الصنف (الباركود: ${variant.sku_barcode}) نهائياً من المخزن.`,
-        created_at: ts
-      });
-
-      saveFallbackStore();
-      return { success: true };
-    }
-
-    const transaction = db.transaction(() => {
-      const variant = db.prepare('SELECT product_id, sku_barcode FROM product_variants WHERE id = ?').get(variantId);
-      if (!variant) throw new Error('الصنف غير موجود');
-
-      db.prepare('DELETE FROM product_variants WHERE id = ?').run(variantId);
-
-      const countObj = db.prepare('SELECT COUNT(*) as count FROM product_variants WHERE product_id = ?').get(variant.product_id);
-      if (countObj && countObj.count === 0) {
-        db.prepare('DELETE FROM products WHERE id = ?').run(variant.product_id);
-        
-        const syncIdProd = 'sync_' + Math.random().toString(36).substr(2, 9);
-        db.prepare(`
-          INSERT INTO sync_queue (id, table_name, operation, record_id, data, status, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(syncIdProd, 'products_delete', 'DELETE', variant.product_id, JSON.stringify({ id: variant.product_id }), 'pending', ts);
-      }
-
-      const syncIdVar = 'sync_' + Math.random().toString(36).substr(2, 9);
-      db.prepare(`
-        INSERT INTO sync_queue (id, table_name, operation, record_id, data, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(syncIdVar, 'product_variants_delete', 'DELETE', variantId, JSON.stringify({ id: variantId }), 'pending', ts);
-
-      const logId = 'log_' + Math.random().toString(36).substr(2, 9);
-      db.prepare(`
-        INSERT INTO activity_logs (id, user_id, username, action, details, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(logId, userId, username, 'VARIANT_DELETED', `حذف الصنف (الباركود: ${variant.sku_barcode}) نهائياً من المخزن.`, ts);
-    });
-
-    try {
-      transaction();
-      return { success: true };
-    } catch (e) {
-      console.error('Delete Variant Transaction Failed:', e);
-      throw e;
-    }
-  },
-
-  deleteSupplier: (supplierId, userId, username) => {
-    const ts = getTimestamp();
-    if (isFallback) {
-      const supplier = fallbackStore.suppliers.find(s => s.id === supplierId);
-      if (!supplier) throw new Error('Supplier not found');
-
-      fallbackStore.suppliers = fallbackStore.suppliers.filter(s => s.id !== supplierId);
-      fallbackStore.supplier_debts = fallbackStore.supplier_debts.filter(d => d.supplier_id !== supplierId);
-
-      fallbackStore.sync_queue.push({
-        id: 'sync_' + Math.random().toString(36).substr(2, 9),
-        table_name: 'suppliers_delete',
-        operation: 'DELETE',
-        record_id: supplierId,
-        data: JSON.stringify({ id: supplierId }),
-        status: 'pending',
-        created_at: ts
-      });
-
-      fallbackStore.activity_logs.push({
-        id: 'log_' + Math.random().toString(36).substr(2, 9),
-        user_id: userId,
-        username,
-        action: 'SUPPLIER_DELETED',
-        details: `حذف المورد ${supplier.name} نهائياً وحذف جميع حركات ديونه.`,
-        created_at: ts
-      });
-
-      saveFallbackStore();
-      return { success: true };
-    }
-
-    const transaction = db.transaction(() => {
-      const supplier = db.prepare('SELECT name FROM suppliers WHERE id = ?').get(supplierId);
-      if (!supplier) throw new Error('المورد غير موجود');
-
-      db.prepare('DELETE FROM suppliers WHERE id = ?').run(supplierId);
-
-      const syncId = 'sync_' + Math.random().toString(36).substr(2, 9);
-      db.prepare(`
-        INSERT INTO sync_queue (id, table_name, operation, record_id, data, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(syncId, 'suppliers_delete', 'DELETE', supplierId, JSON.stringify({ id: supplierId }), 'pending', ts);
-
-      const logId = 'log_' + Math.random().toString(36).substr(2, 9);
-      db.prepare(`
-        INSERT INTO activity_logs (id, user_id, username, action, details, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(logId, userId, username, 'SUPPLIER_DELETED', `حذف المورد ${supplier.name} نهائياً وحذف جميع حركات ديونه.`, ts);
-    });
-
-    try {
-      transaction();
-      return { success: true };
-    } catch (e) {
-      console.error('Delete Supplier Transaction Failed:', e);
-      throw e;
-    }
-  },
-
-  deleteSale: (saleId, userId, username) => {
-    const ts = getTimestamp();
-    if (isFallback) {
-      const sale = fallbackStore.sales.find(s => s.id === saleId);
-      if (!sale) throw new Error('Sale not found');
-
-      const items = fallbackStore.sale_items.filter(item => item.sale_id === saleId);
-      items.forEach(item => {
-        const variant = fallbackStore.product_variants.find(v => v.id === item.variant_id);
-        if (variant) {
-          variant.stock_quantity += item.quantity;
-        }
-      });
-
-      fallbackStore.sales = fallbackStore.sales.filter(s => s.id !== saleId);
-      fallbackStore.sale_items = fallbackStore.sale_items.filter(item => item.sale_id !== saleId);
-
-      fallbackStore.sync_queue.push({
-        id: 'sync_' + Math.random().toString(36).substr(2, 9),
-        table_name: 'sales_delete',
-        operation: 'DELETE',
-        record_id: saleId,
-        data: JSON.stringify({ id: saleId }),
-        status: 'pending',
-        created_at: ts
-      });
-
-      fallbackStore.activity_logs.push({
-        id: 'log_' + Math.random().toString(36).substr(2, 9),
-        user_id: userId,
-        username,
-        action: 'SALE_DELETED',
-        details: `حذف الفاتورة رقم ${sale.invoice_number} لـ ${sale.customer_name || 'عميل نقدي'} وإرجاع الكميات للمخزن.`,
-        created_at: ts
-      });
-
-      saveFallbackStore();
-      return { success: true };
-    }
-
-    const transaction = db.transaction(() => {
-      const sale = db.prepare('SELECT invoice_number, customer_name FROM sales WHERE id = ?').get(saleId);
-      if (!sale) throw new Error('الفاتورة غير موجودة');
-
-      const items = db.prepare('SELECT variant_id, quantity FROM sale_items WHERE sale_id = ?').all(saleId);
-      const updateStock = db.prepare('UPDATE product_variants SET stock_quantity = stock_quantity + ? WHERE id = ?');
-      for (const item of items) {
-        updateStock.run(item.quantity, item.variant_id);
-      }
-
-      db.prepare('DELETE FROM sales WHERE id = ?').run(saleId);
-
-      const syncId = 'sync_' + Math.random().toString(36).substr(2, 9);
-      db.prepare(`
-        INSERT INTO sync_queue (id, table_name, operation, record_id, data, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(syncId, 'sales_delete', 'DELETE', saleId, JSON.stringify({ id: saleId }), 'pending', ts);
-
-      const logId = 'log_' + Math.random().toString(36).substr(2, 9);
-      db.prepare(`
-        INSERT INTO activity_logs (id, user_id, username, action, details, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(logId, userId, username, 'SALE_DELETED', `حذف الفاتورة رقم ${sale.invoice_number} لـ ${sale.customer_name || 'عميل نقدي'} وإرجاع الكميات للمخزن.`, ts);
-    });
-
-    try {
-      transaction();
-      return { success: true };
-    } catch (e) {
-      console.error('Delete Sale Transaction Failed:', e);
-      throw e;
-    }
-  },
-
-  // Update discount on an existing finalized invoice
-  updateSaleDiscount: (saleId, newDiscount, userId, username, reason = '') => {
-    const ts = getTimestamp();
-    const discountNum = Math.max(0, Number(newDiscount) || 0);
-
-    if (isFallback) {
-      const sale = fallbackStore.sales.find(s => s.id === saleId);
-      if (!sale) throw new Error('الفاتورة غير موجودة');
-
-      const totalAmount = Number(sale.total_amount) || 0;
-      if (discountNum > totalAmount) {
-        throw new Error(`قيمة الخصم (${discountNum}) أكبر من إجمالي الفاتورة (${totalAmount})`);
-      }
-
-      const oldDiscount = Number(sale.discount) || 0;
-      const newFinalAmount = Math.max(0, totalAmount - discountNum);
-
-      sale.discount = discountNum;
-      sale.final_amount = newFinalAmount;
-
-      fallbackStore.sync_queue.push({
-        id: 'sync_' + Math.random().toString(36).substr(2, 9),
-        table_name: 'sales',
-        operation: 'UPDATE',
-        record_id: saleId,
-        data: JSON.stringify({ sale }),
-        status: 'pending',
-        created_at: ts
-      });
-
-      fallbackStore.activity_logs.push({
-        id: 'log_' + Math.random().toString(36).substr(2, 9),
-        user_id: userId,
-        username,
-        action: 'SALE_DISCOUNT_UPDATED',
-        details: `تعديل خصم الفاتورة رقم ${sale.invoice_number} من ${oldDiscount} ج.م إلى ${discountNum} ج.م (الصافي الجديد: ${newFinalAmount} ج.م). ${reason ? 'السبب: ' + reason : ''}`,
-        created_at: ts
-      });
-
-      saveFallbackStore();
-      return { success: true, newDiscount: discountNum, newFinalAmount };
-    }
-
-    const transaction = db.transaction(() => {
-      const sale = db.prepare('SELECT * FROM sales WHERE id = ?').get(saleId);
-      if (!sale) throw new Error('الفاتورة غير موجودة');
-
-      const totalAmount = Number(sale.total_amount) || 0;
-      if (discountNum > totalAmount) {
-        throw new Error(`قيمة الخصم (${discountNum}) أكبر من إجمالي الفاتورة (${totalAmount})`);
-      }
-
-      const oldDiscount = Number(sale.discount) || 0;
-      const newFinalAmount = Math.max(0, totalAmount - discountNum);
-
-      db.prepare('UPDATE sales SET discount = ?, final_amount = ? WHERE id = ?')
-        .run(discountNum, newFinalAmount, saleId);
-
-      const updatedSale = {
-        ...sale,
-        discount: discountNum,
-        final_amount: newFinalAmount
-      };
-
-      const syncId = 'sync_' + Math.random().toString(36).substr(2, 9);
-      db.prepare(`
-        INSERT INTO sync_queue (id, table_name, operation, record_id, data, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(syncId, 'sales', 'UPDATE', saleId, JSON.stringify({ sale: updatedSale }), 'pending', ts);
-
-      const logId = 'log_' + Math.random().toString(36).substr(2, 9);
-      db.prepare(`
-        INSERT INTO activity_logs (id, user_id, username, action, details, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(
-        logId,
-        userId,
-        username,
-        'SALE_DISCOUNT_UPDATED',
-        `تعديل خصم الفاتورة رقم ${sale.invoice_number} من ${oldDiscount} ج.م إلى ${discountNum} ج.م (الصافي الجديد: ${newFinalAmount} ج.م). ${reason ? 'السبب: ' + reason : ''}`,
-        ts
-      );
-
-      return { success: true, newDiscount: discountNum, newFinalAmount };
-    });
-
-    try {
-      return transaction();
-    } catch (e) {
-      console.error('Update Sale Discount Failed:', e);
-      throw e;
-    }
-  },
-
-  resetAllInvoicesAndAccounts: (userId, username) => {
-    const ts = getTimestamp();
-    if (isFallback) {
-      fallbackStore.sales = [];
-      fallbackStore.sale_items = [];
-      fallbackStore.supplier_debts = [];
-      fallbackStore.suppliers.forEach(s => {
-        s.current_debt = 0;
-      });
-
-      fallbackStore.sync_queue.push({
-        id: 'sync_' + Math.random().toString(36).substr(2, 9),
-        table_name: 'reset_all',
-        operation: 'DELETE',
-        record_id: 'all',
-        data: JSON.stringify({ reset: true }),
-        status: 'pending',
-        created_at: ts
-      });
-
-      fallbackStore.activity_logs.push({
-        id: 'log_' + Math.random().toString(36).substr(2, 9),
-        user_id: userId,
-        username,
-        action: 'SYSTEM_RESET',
-        details: 'تم تصفير جميع الفواتير والحسابات وحسابات الموردين بالكامل.',
-        created_at: ts
-      });
-
-      saveFallbackStore();
-      return { success: true };
-    }
-
-    const transaction = db.transaction(() => {
-      db.prepare('DELETE FROM sales').run();
-      db.prepare('DELETE FROM supplier_debts').run();
-      db.prepare('UPDATE suppliers SET current_debt = 0').run();
-
-      const syncId = 'sync_' + Math.random().toString(36).substr(2, 9);
-      db.prepare(`
-        INSERT INTO sync_queue (id, table_name, operation, record_id, data, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(syncId, 'reset_all', 'DELETE', 'all', JSON.stringify({ reset: true }), 'pending', ts);
-
-      const logId = 'log_' + Math.random().toString(36).substr(2, 9);
-      db.prepare(`
-        INSERT INTO activity_logs (id, user_id, username, action, details, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(logId, userId, username, 'SYSTEM_RESET', 'تم تصفير جميع الفواتير والحسابات وحسابات الموردين بالكامل.', ts);
-    });
-
-    try {
-      transaction();
-      return { success: true };
-    } catch (e) {
-      console.error('System Reset Failed:', e);
-      throw e;
-    }
-  },
-
   // ── Full DB Snapshot for complete cloud re-sync ──────────────────────────
   getFullSnapshot: () => {
     if (isFallback) {
@@ -1486,6 +1210,814 @@ const handlers = {
       sale_items: db.prepare('SELECT * FROM sale_items').all(),
       activity_logs: db.prepare('SELECT * FROM activity_logs ORDER BY created_at DESC LIMIT 5000').all()
     };
+  },
+
+  refundSaleItem: (saleItemId, refundQty, cashierName) => {
+    const ts = getTimestamp();
+    
+    if (isFallback) {
+      const item = fallbackStore.sale_items.find(x => x.id === saleItemId);
+      if (!item) throw new Error('بند الفاتورة غير موجود');
+      if (refundQty > item.quantity) throw new Error('الكمية المرتجعة أكبر من الكمية المباعة');
+
+      const sale = fallbackStore.sales.find(x => x.id === item.sale_id);
+      if (!sale) throw new Error('الفاتورة غير موجودة');
+
+      const variant = fallbackStore.product_variants.find(x => x.id === item.variant_id);
+      if (variant) {
+        variant.stock_quantity += refundQty;
+      }
+
+      // Update item quantity
+      item.quantity -= refundQty;
+      item.total_price = item.quantity * item.unit_price;
+
+      if (item.quantity === 0) {
+        fallbackStore.sale_items = fallbackStore.sale_items.filter(x => x.id !== saleItemId);
+      }
+
+      // Re-calculate sale totals
+      const remainingItems = fallbackStore.sale_items.filter(x => x.sale_id === sale.id);
+      const newTotal = remainingItems.reduce((sum, x) => sum + x.total_price, 0);
+      sale.total_amount = newTotal;
+      sale.final_amount = Math.max(0, newTotal - sale.discount);
+
+      // Queue syncs
+      fallbackStore.sync_queue.push({
+        id: 'sync_' + Math.random().toString(36).substr(2, 9),
+        table_name: 'sales',
+        operation: 'UPDATE',
+        record_id: sale.id,
+        data: JSON.stringify({ sale, items: remainingItems }),
+        status: 'pending',
+        error_message: null,
+        created_at: ts
+      });
+
+      if (variant) {
+        fallbackStore.sync_queue.push({
+          id: 'sync_' + Math.random().toString(36).substr(2, 9),
+          table_name: 'product_variants',
+          operation: 'UPDATE',
+          record_id: variant.id,
+          data: JSON.stringify(variant),
+          status: 'pending',
+          error_message: null,
+          created_at: ts
+        });
+      }
+
+      // Log Activity
+      fallbackStore.activity_logs.push({
+        id: 'log_' + Math.random().toString(36).substr(2, 9),
+        user_id: 'system',
+        username: cashierName,
+        action: 'SALE_ITEM_REFUNDED',
+        details: `مرتجع جزئي لعدد ${refundQty} من صنف ${item.name} في الفاتورة ${sale.invoice_number}`,
+        created_at: ts
+      });
+
+      // Save to refund_logs
+      if (!fallbackStore.refund_logs) fallbackStore.refund_logs = [];
+      fallbackStore.refund_logs.push({
+        id: 'ref_' + Math.random().toString(36).substr(2, 9),
+        sale_id: sale.id,
+        invoice_number: sale.invoice_number,
+        variant_id: item.variant_id,
+        name: item.name,
+        origin: item.origin,
+        quantity: refundQty,
+        refund_amount: refundQty * item.unit_price,
+        cashier_name: cashierName,
+        created_at: ts
+      });
+
+      saveFallbackStore();
+      return { success: true };
+    }
+
+    // SQLite mode
+    const transaction = db.transaction(() => {
+      const item = db.prepare('SELECT * FROM sale_items WHERE id = ?').get(saleItemId);
+      if (!item) throw new Error('بند الفاتورة غير موجود');
+      if (refundQty > item.quantity) throw new Error('الكمية المرتجعة أكبر من الكمية المباعة');
+
+      const sale = db.prepare('SELECT * FROM sales WHERE id = ?').get(item.sale_id);
+      if (!sale) throw new Error('الفاتورة غير موجودة');
+
+      // Update variant stock
+      db.prepare('UPDATE product_variants SET stock_quantity = stock_quantity + ? WHERE id = ?').run(refundQty, item.variant_id);
+
+      // Update or delete sale item
+      const newQty = item.quantity - refundQty;
+      if (newQty === 0) {
+        db.prepare('DELETE FROM sale_items WHERE id = ?').run(saleItemId);
+      } else {
+        db.prepare('UPDATE sale_items SET quantity = ?, total_price = ? WHERE id = ?').run(newQty, newQty * item.unit_price, saleItemId);
+      }
+
+      // Re-calculate sale totals
+      const remaining = db.prepare('SELECT * FROM sale_items WHERE sale_id = ?').all(sale.id);
+      const newTotal = remaining.reduce((sum, x) => sum + x.total_price, 0);
+      const newFinal = Math.max(0, newTotal - sale.discount);
+
+      db.prepare('UPDATE sales SET total_amount = ?, final_amount = ? WHERE id = ?').run(newTotal, newFinal, sale.id);
+
+      // Queue syncs
+      const syncId1 = 'sync_' + Math.random().toString(36).substr(2, 9);
+      const updatedSale = { ...sale, total_amount: newTotal, final_amount: newFinal };
+      db.prepare(`INSERT INTO sync_queue (id, table_name, operation, record_id, data, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+        syncId1,
+        'sales',
+        'UPDATE',
+        sale.id,
+        JSON.stringify({ sale: updatedSale, items: remaining }),
+        'pending',
+        ts
+      );
+
+      const syncId2 = 'sync_' + Math.random().toString(36).substr(2, 9);
+      const variant = db.prepare('SELECT * FROM product_variants WHERE id = ?').get(item.variant_id);
+      if (variant) {
+        db.prepare(`INSERT INTO sync_queue (id, table_name, operation, record_id, data, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+          syncId2,
+          'product_variants',
+          'UPDATE',
+          variant.id,
+          JSON.stringify(variant),
+          'pending',
+          ts
+        );
+      }
+
+      // Log Activity
+      const logId = 'log_' + Math.random().toString(36).substr(2, 9);
+      db.prepare(`INSERT INTO activity_logs (id, user_id, username, action, details, created_at) VALUES (?, ?, ?, ?, ?, ?)`).run(
+        logId,
+        'system',
+        cashierName,
+        'SALE_ITEM_REFUNDED',
+        `مرتجع جزئي لعدد ${refundQty} من صنف ${item.name} في الفاتورة ${sale.invoice_number}`,
+        ts
+      );
+
+      // Save to refund_logs
+      const refundLogId = 'ref_' + Math.random().toString(36).substr(2, 9);
+      db.prepare(`
+        INSERT INTO refund_logs (id, sale_id, invoice_number, variant_id, name, origin, quantity, refund_amount, cashier_name, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(refundLogId, sale.id, sale.invoice_number, item.variant_id, item.name, item.origin, refundQty, refundQty * item.unit_price, cashierName, ts);
+    });
+
+    try {
+      transaction();
+      return { success: true };
+    } catch (e) {
+      console.error('Refund Transaction Failed:', e);
+      throw e;
+    }
+  },
+
+  refundWholeSale: (saleId, cashierName) => {
+    const ts = getTimestamp();
+
+    if (isFallback) {
+      const sale = fallbackStore.sales.find(x => x.id === saleId);
+      if (!sale) throw new Error('الفاتورة غير موجودة');
+
+      const items = fallbackStore.sale_items.filter(x => x.sale_id === saleId);
+
+      // Restore stocks for all items
+      items.forEach(item => {
+        const variant = fallbackStore.product_variants.find(x => x.id === item.variant_id);
+        if (variant) {
+          variant.stock_quantity += item.quantity;
+          
+          fallbackStore.sync_queue.push({
+            id: 'sync_' + Math.random().toString(36).substr(2, 9),
+            table_name: 'product_variants',
+            operation: 'UPDATE',
+            record_id: variant.id,
+            data: JSON.stringify(variant),
+            status: 'pending',
+            error_message: null,
+            created_at: ts
+          });
+        }
+      });
+
+      // Clear/delete items
+      fallbackStore.sale_items = fallbackStore.sale_items.filter(x => x.sale_id !== saleId);
+
+      // Set sale to 0
+      sale.total_amount = 0;
+      sale.final_amount = 0;
+
+      // Sync sale update
+      fallbackStore.sync_queue.push({
+        id: 'sync_' + Math.random().toString(36).substr(2, 9),
+        table_name: 'sales',
+        operation: 'UPDATE',
+        record_id: sale.id,
+        data: JSON.stringify({ sale, items: [] }),
+        status: 'pending',
+        error_message: null,
+        created_at: ts
+      });
+
+      // Log activity
+      fallbackStore.activity_logs.push({
+        id: 'log_' + Math.random().toString(36).substr(2, 9),
+        user_id: 'system',
+        username: cashierName,
+        action: 'SALE_REFUNDED',
+        details: `مرتجع كامل للفاتورة رقم ${sale.invoice_number} بقيمة ${sale.final_amount} ج.م`,
+        created_at: ts
+      });
+
+      // Save all to refund_logs
+      if (!fallbackStore.refund_logs) fallbackStore.refund_logs = [];
+      items.forEach(item => {
+        fallbackStore.refund_logs.push({
+          id: 'ref_' + Math.random().toString(36).substr(2, 9),
+          sale_id: sale.id,
+          invoice_number: sale.invoice_number,
+          variant_id: item.variant_id,
+          name: item.name,
+          origin: item.origin,
+          quantity: item.quantity,
+          refund_amount: item.quantity * item.unit_price,
+          cashier_name: cashierName,
+          created_at: ts
+        });
+      });
+
+      saveFallbackStore();
+      return { success: true };
+    }
+
+    // SQLite mode
+    const transaction = db.transaction(() => {
+      const sale = db.prepare('SELECT * FROM sales WHERE id = ?').get(saleId);
+      if (!sale) throw new Error('الفاتورة غير موجودة');
+
+      const items = db.prepare('SELECT * FROM sale_items WHERE sale_id = ?').all(saleId);
+
+      // Restore stocks and queue syncs
+      items.forEach(item => {
+        db.prepare('UPDATE product_variants SET stock_quantity = stock_quantity + ? WHERE id = ?').run(item.quantity, item.variant_id);
+        
+        const syncId = 'sync_' + Math.random().toString(36).substr(2, 9);
+        const variant = db.prepare('SELECT * FROM product_variants WHERE id = ?').get(item.variant_id);
+        if (variant) {
+          db.prepare(`INSERT INTO sync_queue (id, table_name, operation, record_id, data, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+            syncId,
+            'product_variants',
+            'UPDATE',
+            variant.id,
+            JSON.stringify(variant),
+            'pending',
+            ts
+          );
+        }
+      });
+
+      // Delete items
+      db.prepare('DELETE FROM sale_items WHERE sale_id = ?').run(saleId);
+
+      // Set sale to 0
+      db.prepare('UPDATE sales SET total_amount = 0, final_amount = 0 WHERE id = ?').run(saleId);
+
+      // Sync sale update
+      const syncId = 'sync_' + Math.random().toString(36).substr(2, 9);
+      const updatedSale = { ...sale, total_amount: 0, final_amount: 0 };
+      db.prepare(`INSERT INTO sync_queue (id, table_name, operation, record_id, data, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+        syncId,
+        'sales',
+        'UPDATE',
+        sale.id,
+        JSON.stringify({ sale: updatedSale, items: [] }),
+        'pending',
+        ts
+      );
+
+      // Log Activity
+      const logId = 'log_' + Math.random().toString(36).substr(2, 9);
+      db.prepare(`INSERT INTO activity_logs (id, user_id, username, action, details, created_at) VALUES (?, ?, ?, ?, ?, ?)`).run(
+        logId,
+        'system',
+        cashierName,
+        'SALE_REFUNDED',
+        `مرتجع كامل للفاتورة رقم ${sale.invoice_number}`,
+        ts
+      );
+
+      // Save all to refund_logs
+      const insertRefund = db.prepare(`
+        INSERT INTO refund_logs (id, sale_id, invoice_number, variant_id, name, origin, quantity, refund_amount, cashier_name, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      items.forEach(item => {
+        const refundLogId = 'ref_' + Math.random().toString(36).substr(2, 9);
+        insertRefund.run(refundLogId, sale.id, sale.invoice_number, item.variant_id, item.name, item.origin, item.quantity, item.quantity * item.unit_price, cashierName, ts);
+      });
+    });
+
+    try {
+      transaction();
+      return { success: true };
+    } catch (e) {
+      console.error('Whole Refund Transaction Failed:', e);
+      throw e;
+    }
+  },
+
+  getRefundLogs: () => {
+    if (isFallback) {
+      return fallbackStore.refund_logs || [];
+    }
+    return db.prepare('SELECT * FROM refund_logs ORDER BY created_at DESC').all();
+  },
+
+  updateInvoiceDiscount: (saleId, newDiscount, cashierName) => {
+    const ts = getTimestamp();
+    newDiscount = Number(newDiscount) || 0;
+    if (newDiscount < 0) throw new Error('قيمة الخصم لا يمكن أن تكون سالبة');
+
+    if (isFallback) {
+      const sale = fallbackStore.sales.find(x => x.id === saleId);
+      if (!sale) throw new Error('الفاتورة غير موجودة');
+      if (newDiscount > sale.total_amount) throw new Error('قيمة الخصم لا يمكن أن تتجاوز إجمالي الفاتورة');
+
+      const oldDiscount = sale.discount || 0;
+      const oldFinal = sale.final_amount;
+      const newFinal = Math.max(0, sale.total_amount - newDiscount);
+      const diff = oldFinal - newFinal;
+
+      sale.discount = newDiscount;
+      sale.final_amount = newFinal;
+
+      if (sale.payment_method === 'DEBT' && sale.credit_customer_id && diff !== 0) {
+        const cust = fallbackStore.credit_customers?.find(c => c.id === sale.credit_customer_id);
+        if (cust) {
+          cust.total_debt = Math.max(0, (cust.total_debt || 0) - diff);
+          fallbackStore.sync_queue.push({
+            id: 'sync_' + Math.random().toString(36).substr(2, 9),
+            table_name: 'credit_customers',
+            operation: 'UPDATE',
+            record_id: cust.id,
+            data: JSON.stringify(cust),
+            status: 'pending',
+            error_message: null,
+            created_at: ts
+          });
+        }
+      }
+
+      const remainingItems = fallbackStore.sale_items.filter(x => x.sale_id === sale.id);
+      fallbackStore.sync_queue.push({
+        id: 'sync_' + Math.random().toString(36).substr(2, 9),
+        table_name: 'sales',
+        operation: 'UPDATE',
+        record_id: sale.id,
+        data: JSON.stringify({ sale, items: remainingItems }),
+        status: 'pending',
+        error_message: null,
+        created_at: ts
+      });
+
+      fallbackStore.activity_logs.push({
+        id: 'log_' + Math.random().toString(36).substr(2, 9),
+        user_id: 'system',
+        username: cashierName,
+        action: 'INVOICE_DISCOUNT_UPDATED',
+        details: `تعديل خصم الفاتورة ${sale.invoice_number} من ${oldDiscount} ج.م إلى ${newDiscount} ج.م (الصافي الجديد: ${newFinal} ج.م)`,
+        created_at: ts
+      });
+
+      saveFallbackStore();
+      return { success: true, updatedSale: sale };
+    }
+
+    // SQLite mode
+    const transaction = db.transaction(() => {
+      const sale = db.prepare('SELECT * FROM sales WHERE id = ?').get(saleId);
+      if (!sale) throw new Error('الفاتورة غير موجودة');
+      if (newDiscount > sale.total_amount) throw new Error('قيمة الخصم لا يمكن أن تتجاوز إجمالي الفاتورة');
+
+      const oldDiscount = sale.discount || 0;
+      const oldFinal = sale.final_amount;
+      const newFinal = Math.max(0, sale.total_amount - newDiscount);
+      const diff = oldFinal - newFinal;
+
+      db.prepare('UPDATE sales SET discount = ?, final_amount = ? WHERE id = ?').run(newDiscount, newFinal, saleId);
+
+      if (sale.payment_method === 'DEBT' && sale.credit_customer_id && diff !== 0) {
+        db.prepare('UPDATE credit_customers SET total_debt = MAX(0, total_debt - ?) WHERE id = ?').run(diff, sale.credit_customer_id);
+        const cust = db.prepare('SELECT * FROM credit_customers WHERE id = ?').get(sale.credit_customer_id);
+        if (cust) {
+          const syncCustId = 'sync_' + Math.random().toString(36).substr(2, 9);
+          db.prepare(`INSERT INTO sync_queue (id, table_name, operation, record_id, data, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+            syncCustId,
+            'credit_customers',
+            'UPDATE',
+            cust.id,
+            JSON.stringify(cust),
+            'pending',
+            ts
+          );
+        }
+      }
+
+      const remainingItems = db.prepare('SELECT * FROM sale_items WHERE sale_id = ?').all(saleId);
+      const updatedSale = { ...sale, discount: newDiscount, final_amount: newFinal };
+      const syncId = 'sync_' + Math.random().toString(36).substr(2, 9);
+      db.prepare(`INSERT INTO sync_queue (id, table_name, operation, record_id, data, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+        syncId,
+        'sales',
+        'UPDATE',
+        sale.id,
+        JSON.stringify({ sale: updatedSale, items: remainingItems }),
+        'pending',
+        ts
+      );
+
+      const logId = 'log_' + Math.random().toString(36).substr(2, 9);
+      db.prepare(`INSERT INTO activity_logs (id, user_id, username, action, details, created_at) VALUES (?, ?, ?, ?, ?, ?)`).run(
+        logId,
+        'system',
+        cashierName,
+        'INVOICE_DISCOUNT_UPDATED',
+        `تعديل خصم الفاتورة ${sale.invoice_number} من ${oldDiscount} ج.م إلى ${newDiscount} ج.م (الصافي الجديد: ${newFinal} ج.م)`,
+        ts
+      );
+    });
+
+    transaction();
+    const updatedSale = db.prepare('SELECT * FROM sales WHERE id = ?').get(saleId);
+    return { success: true, updatedSale };
+  },
+
+  // ── Credit Customers ──────────────────────────────────────────────────────
+
+  getCreditCustomers: () => {
+    if (isFallback) {
+      return fallbackStore.credit_customers || [];
+    }
+    return db.prepare('SELECT * FROM credit_customers ORDER BY name').all();
+  },
+
+  saveCreditCustomer: (customerData) => {
+    const ts = getTimestamp();
+    const { id, name, phone, address, notes } = customerData;
+    const custId = id || ('cust_' + Math.random().toString(36).substr(2, 9));
+
+    if (isFallback) {
+      if (!fallbackStore.credit_customers) fallbackStore.credit_customers = [];
+      const existingIdx = fallbackStore.credit_customers.findIndex(c => c.id === custId);
+      if (existingIdx >= 0) {
+        fallbackStore.credit_customers[existingIdx] = {
+          ...fallbackStore.credit_customers[existingIdx],
+          name, phone, address, notes
+        };
+      } else {
+        fallbackStore.credit_customers.push({ id: custId, name, phone, address, notes, total_debt: 0, created_at: ts });
+      }
+      saveFallbackStore();
+      return { success: true, id: custId };
+    }
+
+    try {
+      const existing = db.prepare('SELECT id FROM credit_customers WHERE id = ?').get(custId);
+      if (existing) {
+        db.prepare('UPDATE credit_customers SET name=?, phone=?, address=?, notes=? WHERE id=?')
+          .run(name, phone || null, address || null, notes || null, custId);
+      } else {
+        db.prepare('INSERT INTO credit_customers (id, name, phone, address, notes, total_debt, created_at) VALUES (?,?,?,?,?,0,?)')
+          .run(custId, name, phone || null, address || null, notes || null, ts);
+      }
+      return { success: true, id: custId };
+    } catch (e) {
+      console.error('Save Credit Customer Failed:', e);
+      throw e;
+    }
+  },
+
+  deleteCreditCustomer: (customerId) => {
+    const ts = getTimestamp();
+    const syncId = 'sync_' + Math.random().toString(36).substr(2, 9);
+    if (isFallback) {
+      if (!fallbackStore.credit_customers) fallbackStore.credit_customers = [];
+      fallbackStore.credit_customers = fallbackStore.credit_customers.filter(c => c.id !== customerId);
+      if (fallbackStore.customer_payments) {
+        fallbackStore.customer_payments = fallbackStore.customer_payments.filter(p => p.customer_id !== customerId);
+      }
+      fallbackStore.sync_queue.push({
+        id: syncId,
+        table_name: 'credit_customers_delete',
+        operation: 'DELETE',
+        record_id: customerId,
+        data: JSON.stringify({ id: customerId }),
+        status: 'pending',
+        created_at: ts
+      });
+      saveFallbackStore();
+      return { success: true };
+    }
+    try {
+      db.prepare('DELETE FROM customer_payments WHERE customer_id = ?').run(customerId);
+      db.prepare('DELETE FROM credit_customers WHERE id = ?').run(customerId);
+      db.prepare('INSERT INTO sync_queue (id, table_name, operation, record_id, data, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(syncId, 'credit_customers_delete', 'DELETE', customerId, JSON.stringify({ id: customerId }), 'pending', ts);
+      return { success: true };
+    } catch (e) {
+      console.error('Delete Credit Customer Failed:', e);
+      throw e;
+    }
+  },
+
+  addCustomerPayment: (customerId, amount, notes, cashierName) => {
+    const ts = getTimestamp();
+    const payId = 'pay_' + Math.random().toString(36).substr(2, 9);
+
+    if (isFallback) {
+      if (!fallbackStore.credit_customers) fallbackStore.credit_customers = [];
+      if (!fallbackStore.customer_payments) fallbackStore.customer_payments = [];
+      const cust = fallbackStore.credit_customers.find(c => c.id === customerId);
+      if (!cust) throw new Error('العميل غير موجود');
+      cust.total_debt = Math.max(0, (cust.total_debt || 0) - amount);
+      fallbackStore.customer_payments.push({ id: payId, customer_id: customerId, amount, notes: notes || '', created_at: ts });
+      fallbackStore.activity_logs.push({
+        id: 'log_' + Math.random().toString(36).substr(2, 9),
+        user_id: 'system', username: cashierName,
+        action: 'CUSTOMER_PAYMENT',
+        details: `دفعة ${amount} ج.م من العميل ${cust.name}`,
+        created_at: ts
+      });
+      saveFallbackStore();
+      return { success: true };
+    }
+
+    const transaction = db.transaction(() => {
+      const cust = db.prepare('SELECT * FROM credit_customers WHERE id = ?').get(customerId);
+      if (!cust) throw new Error('العميل غير موجود');
+      db.prepare('INSERT INTO customer_payments (id, customer_id, amount, notes, created_at) VALUES (?,?,?,?,?)')
+        .run(payId, customerId, amount, notes || null, ts);
+      db.prepare('UPDATE credit_customers SET total_debt = MAX(0, total_debt - ?) WHERE id = ?').run(amount, customerId);
+      const logId = 'log_' + Math.random().toString(36).substr(2, 9);
+      db.prepare('INSERT INTO activity_logs (id, user_id, username, action, details, created_at) VALUES (?,?,?,?,?,?)')
+        .run(logId, 'system', cashierName, 'CUSTOMER_PAYMENT', `دفعة ${amount} ج.م من العميل ${cust.name}`, ts);
+    });
+    try {
+      transaction();
+      return { success: true };
+    } catch (e) {
+      console.error('Add Customer Payment Failed:', e);
+      throw e;
+    }
+  },
+
+  getCustomerDetails: (customerId) => {
+    if (isFallback) {
+      const cust = (fallbackStore.credit_customers || []).find(c => c.id === customerId);
+      const payments = (fallbackStore.customer_payments || []).filter(p => p.customer_id === customerId);
+      const sales = (fallbackStore.sales || []).filter(s => s.credit_customer_id === customerId);
+      return { customer: cust, payments, sales };
+    }
+    const customer = db.prepare('SELECT * FROM credit_customers WHERE id = ?').get(customerId);
+    const payments = db.prepare('SELECT * FROM customer_payments WHERE customer_id = ? ORDER BY created_at DESC').all(customerId);
+    const sales = db.prepare('SELECT * FROM sales WHERE credit_customer_id = ? ORDER BY created_at DESC').all(customerId);
+    return { customer, payments, sales };
+  },
+
+  updateCustomerDebt: (customerId, additionalAmount) => {
+    // Called after a DEBT sale is made
+    if (isFallback) {
+      if (!fallbackStore.credit_customers) fallbackStore.credit_customers = [];
+      const cust = fallbackStore.credit_customers.find(c => c.id === customerId);
+      if (cust) {
+        cust.total_debt = (cust.total_debt || 0) + additionalAmount;
+        saveFallbackStore();
+      }
+      return { success: true };
+    }
+    try {
+      db.prepare('UPDATE credit_customers SET total_debt = total_debt + ? WHERE id = ?').run(additionalAmount, customerId);
+      return { success: true };
+    } catch (e) {
+      console.error('Update Customer Debt Failed:', e);
+      throw e;
+    }
+  },
+
+  deleteProduct: (productId) => {
+    const ts = getTimestamp();
+    if (isFallback) {
+      const vars = (fallbackStore.product_variants || []).filter(v => v.product_id === productId);
+      const varIds = vars.map(v => v.id);
+      
+      // Update fallback sale items to NULL variant_id for all these variants
+      if (fallbackStore.sale_items) {
+        fallbackStore.sale_items.forEach(item => {
+          if (varIds.includes(item.variant_id)) {
+            item.variant_id = null;
+          }
+        });
+      }
+      
+      fallbackStore.products = (fallbackStore.products || []).filter(p => p.id !== productId);
+      fallbackStore.product_variants = (fallbackStore.product_variants || []).filter(v => v.product_id !== productId);
+      fallbackStore.product_compatibility = (fallbackStore.product_compatibility || []).filter(c => !varIds.includes(c.variant_id));
+      
+      const syncId = 'sync_' + Math.random().toString(36).substr(2, 9);
+      fallbackStore.sync_queue.push({
+        id: syncId,
+        table_name: 'products_delete',
+        operation: 'DELETE',
+        record_id: productId,
+        data: JSON.stringify({ id: productId }),
+        status: 'pending',
+        created_at: ts
+      });
+      saveFallbackStore();
+      return { success: true };
+    }
+    
+    const transaction = db.transaction(() => {
+      const vars = db.prepare('SELECT id FROM product_variants WHERE product_id = ?').all(productId);
+      const varIds = vars.map(v => v.id);
+      
+      if (varIds.length > 0) {
+        const placeholders = varIds.map(() => '?').join(',');
+        
+        // Detach all variants from sale_items to satisfy foreign key constraints
+        db.prepare(`UPDATE sale_items SET variant_id = NULL WHERE variant_id IN (${placeholders})`).run(...varIds);
+        
+        db.prepare(`DELETE FROM product_compatibility WHERE variant_id IN (${placeholders})`).run(...varIds);
+        db.prepare('DELETE FROM product_variants WHERE product_id = ?').run(productId);
+      }
+      db.prepare('DELETE FROM products WHERE id = ?').run(productId);
+      
+      const syncId = 'sync_' + Math.random().toString(36).substr(2, 9);
+      db.prepare('INSERT INTO sync_queue (id, table_name, operation, record_id, data, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(syncId, 'products_delete', 'DELETE', productId, JSON.stringify({ id: productId }), 'pending', ts);
+    });
+    
+    try {
+      transaction();
+      return { success: true };
+    } catch (e) {
+      console.error('Delete Product Failed:', e);
+      throw e;
+    }
+  },
+
+  deleteVariant: (variantId) => {
+    const ts = getTimestamp();
+    if (isFallback) {
+      const v = (fallbackStore.product_variants || []).find(v => v.id === variantId);
+      if (!v) return { success: true };
+      
+      // Update fallback sale items to NULL variant_id
+      if (fallbackStore.sale_items) {
+        fallbackStore.sale_items.forEach(item => {
+          if (item.variant_id === variantId) {
+            item.variant_id = null;
+          }
+        });
+      }
+
+      fallbackStore.product_variants = (fallbackStore.product_variants || []).filter(varObj => varObj.id !== variantId);
+      fallbackStore.product_compatibility = (fallbackStore.product_compatibility || []).filter(c => c.variant_id !== variantId);
+      
+      const hasMore = (fallbackStore.product_variants || []).some(varObj => varObj.product_id === v.product_id);
+      if (!hasMore) {
+        fallbackStore.products = (fallbackStore.products || []).filter(p => p.id !== v.product_id);
+      }
+      
+      fallbackStore.sync_queue.push({
+        id: 'sync_' + Math.random().toString(36).substr(2, 9),
+        table_name: 'product_variants_delete',
+        operation: 'DELETE',
+        record_id: variantId,
+        data: JSON.stringify({ id: variantId, product_id: v.product_id, deleteProduct: !hasMore }),
+        status: 'pending',
+        created_at: ts
+      });
+      saveFallbackStore();
+      return { success: true };
+    }
+    
+    const transaction = db.transaction(() => {
+      const v = db.prepare('SELECT product_id FROM product_variants WHERE id = ?').get(variantId);
+      if (!v) return { success: true };
+      
+      // Detach from sale_items to bypass foreign key constraint restrictions
+      db.prepare('UPDATE sale_items SET variant_id = NULL WHERE variant_id = ?').run(variantId);
+      
+      db.prepare('DELETE FROM product_compatibility WHERE variant_id = ?').run(variantId);
+      db.prepare('DELETE FROM product_variants WHERE id = ?').run(variantId);
+      
+      const hasMore = db.prepare('SELECT count(*) as count FROM product_variants WHERE product_id = ?').get(v.product_id).count > 0;
+      if (!hasMore) {
+        db.prepare('DELETE FROM products WHERE id = ?').run(v.product_id);
+      }
+      
+      const syncId = 'sync_' + Math.random().toString(36).substr(2, 9);
+      db.prepare('INSERT INTO sync_queue (id, table_name, operation, record_id, data, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(syncId, 'product_variants_delete', 'DELETE', variantId, JSON.stringify({ id: variantId, product_id: v.product_id, deleteProduct: !hasMore }), 'pending', ts);
+    });
+    
+    try {
+      transaction();
+      return { success: true };
+    } catch (e) {
+      console.error('Delete Variant Failed:', e);
+      throw e;
+    }
+  },
+
+  deleteSupplier: (supplierId) => {
+    const ts = getTimestamp();
+    const syncId = 'sync_' + Math.random().toString(36).substr(2, 9);
+    if (isFallback) {
+      fallbackStore.suppliers = (fallbackStore.suppliers || []).filter(s => s.id !== supplierId);
+      fallbackStore.supplier_debts = (fallbackStore.supplier_debts || []).filter(d => d.supplier_id !== supplierId);
+      fallbackStore.sync_queue.push({
+        id: syncId,
+        table_name: 'suppliers_delete',
+        operation: 'DELETE',
+        record_id: supplierId,
+        data: JSON.stringify({ id: supplierId }),
+        status: 'pending',
+        created_at: ts
+      });
+      saveFallbackStore();
+      return { success: true };
+    }
+    try {
+      db.prepare('DELETE FROM supplier_debts WHERE supplier_id = ?').run(supplierId);
+      db.prepare('DELETE FROM suppliers WHERE id = ?').run(supplierId);
+      db.prepare('INSERT INTO sync_queue (id, table_name, operation, record_id, data, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(syncId, 'suppliers_delete', 'DELETE', supplierId, JSON.stringify({ id: supplierId }), 'pending', ts);
+      return { success: true };
+    } catch (e) {
+      console.error('Delete Supplier Failed:', e);
+      throw e;
+    }
+  },
+
+  resetAllInvoices: (cashierName) => {
+    const ts = getTimestamp();
+    if (isFallback) {
+      fallbackStore.sales = [];
+      fallbackStore.sale_items = [];
+      fallbackStore.refund_logs = [];
+      fallbackStore.customer_payments = [];
+      fallbackStore.supplier_debts = [];
+      fallbackStore.sync_queue = [];
+      
+      if (fallbackStore.suppliers) {
+        fallbackStore.suppliers.forEach(s => { s.current_debt = 0; });
+      }
+      if (fallbackStore.credit_customers) {
+        fallbackStore.credit_customers.forEach(c => { c.total_debt = 0; });
+      }
+      
+      fallbackStore.activity_logs.push({
+        id: 'log_' + Math.random().toString(36).substr(2, 9),
+        user_id: 'system',
+        username: cashierName,
+        action: 'DATABASE_RESET',
+        details: 'تم تصفير جميع فواتير وحسابات النظام بالكامل بواسطة الأدمن.',
+        created_at: ts
+      });
+      saveFallbackStore();
+      return { success: true };
+    }
+    
+    const transaction = db.transaction(() => {
+      db.prepare('DELETE FROM sales;').run();
+      db.prepare('DELETE FROM sale_items;').run();
+      db.prepare('DELETE FROM refund_logs;').run();
+      db.prepare('DELETE FROM customer_payments;').run();
+      db.prepare('DELETE FROM supplier_debts;').run();
+      db.prepare('DELETE FROM sync_queue;').run();
+      db.prepare('UPDATE suppliers SET current_debt = 0;').run();
+      db.prepare('UPDATE credit_customers SET total_debt = 0;').run();
+      
+      const logId = 'log_' + Math.random().toString(36).substr(2, 9);
+      db.prepare('INSERT INTO activity_logs (id, user_id, username, action, details, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(logId, 'system', cashierName, 'DATABASE_RESET', 'تم تصفير جميع فواتير وحسابات النظام بالكامل بواسطة الأدمن.', ts);
+    });
+    
+    try {
+      transaction();
+      return { success: true };
+    } catch (e) {
+      console.error('Reset Database Failed:', e);
+      throw e;
+    }
   }
 };
 
